@@ -7,6 +7,7 @@
 
 mod app;
 mod audio;
+mod audio_feedback;
 mod config;
 mod injector;
 mod input;

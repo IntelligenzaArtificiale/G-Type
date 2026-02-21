@@ -96,6 +96,7 @@ async fn state_idle(input_rx: &mut InputRx, _hotkey_label: &str) -> State {
         match input_rx.recv().await {
             Some(InputSignal::Start) => {
                 info!("🎤 Recording...");
+                crate::audio_feedback::play_start_beep();
                 return State::Recording;
             }
             Some(InputSignal::Stop) => {
@@ -135,7 +136,9 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
     // Spawn a blocking task that drains the std::sync::mpsc receiver.
     // This runs on tokio's blocking thread pool so it won't block the async runtime.
     let collector_handle = tokio::task::spawn_blocking(move || {
-        let mut all_samples = Vec::<i16>::new();
+        // Pre-allocate buffer for ~10 seconds of audio (160,000 samples)
+        // to avoid reallocations during recording.
+        let mut all_samples = Vec::<i16>::with_capacity(160_000);
         // recv() blocks until a chunk arrives or all senders are dropped
         while let Ok(chunk) = audio_rx.recv() {
             all_samples.extend_from_slice(&chunk);
@@ -178,6 +181,7 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
 
     let duration = all_samples.len() as f64 / 16_000.0;
     info!(duration = format!("{:.1}s", duration), "⏹ Stopped. Transcribing...");
+    crate::audio_feedback::play_stop_beep();
 
     if all_samples.is_empty() {
         warn!("No audio captured, skipping transcription");
@@ -189,6 +193,7 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         Err(e) => {
             error!(%e, "Transcription failed");
             warn!("Returning to idle due to transcription failure");
+            crate::audio_feedback::play_error_beep();
             return State::Idle;
         }
     };
@@ -201,10 +206,9 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
     // Inject the transcribed text
 
     // Run injection on a blocking thread to avoid blocking the async runtime
-    let threshold = config.injection_threshold;
     let text = transcription.clone();
     let inject_result = tokio::task::spawn_blocking(move || {
-        injector::inject(&text, threshold)
+        injector::inject(&text)
     })
     .await;
 

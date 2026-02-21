@@ -6,17 +6,26 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use reqwest::Client;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use serde_json::{Value, json};
 use tracing::{debug, error, warn};
 
 use crate::config::Config;
 
-/// HTTP client singleton (reuses connections).
-fn http_client() -> Result<Client> {
-    Client::builder()
+/// HTTP client singleton with retry middleware.
+fn http_client() -> Result<ClientWithMiddleware> {
+    let reqwest_client = Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
-        .context("Failed to build HTTP client")
+        .context("Failed to build HTTP client")?;
+
+    // Retry policy: up to 3 retries with exponential backoff
+    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+
+    Ok(ClientBuilder::new(reqwest_client)
+        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+        .build())
 }
 
 /// Transcribe audio samples using Gemini REST API.
@@ -53,7 +62,7 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
 
     debug!(url = %url, "Sending request to Gemini API");
 
-    // Step 3: Send HTTP POST
+    // Step 3: Send HTTP POST (with auto-retry for 429/503)
     let client = http_client()?;
     let response = client
         .post(&url)
@@ -73,11 +82,15 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
 
     if !status.is_success() {
         error!(status = %status, body = %truncate_str(&response_text, 500), "Gemini API error");
-        bail!(
-            "Gemini API returned HTTP {}: {}",
-            status,
-            truncate_str(&response_text, 200)
-        );
+        
+        // Return a user-friendly error message that will be injected
+        if status.as_u16() == 429 {
+            return Ok("[Errore: Troppe richieste (429). Attendi qualche secondo e riprova]".to_string());
+        } else if status.as_u16() == 403 {
+            return Ok("[Errore: API Key non valida o permessi insufficienti (403)]".to_string());
+        } else {
+            return Ok(format!("[Errore API Gemini: {}]", status));
+        }
     }
 
     // Step 4: Parse the response
@@ -153,7 +166,8 @@ fn extract_text(response: &Value) -> Result<String> {
             .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("Unknown API error");
-        bail!("Gemini API error: {}", msg);
+        error!("Gemini API error: {}", msg);
+        return Ok(format!("[Errore API Gemini: {}]", msg));
     }
 
     warn!(
@@ -288,8 +302,8 @@ mod tests {
             }
         });
         let result = extract_text(&response);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("API key invalid"));
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("API key invalid"));
     }
 
     #[test]

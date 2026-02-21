@@ -1,6 +1,6 @@
 [package]
 name = "g-type"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2021"
 description = "Global walkie-talkie dictation daemon powered by Gemini REST API"
 license = "MIT"
@@ -47,6 +47,11 @@ base64 = "0.22"
 
 # Config directory resolution
 directories = "5"
+arboard = "3.6.1"
+rodio = "0.20.1"
+reqwest-retry = "0.8"
+reqwest-middleware = { version = "0.4", features = ["json"] }
+dialoguer = "0.12.0"
 
 [profile.release]
 opt-level = 3

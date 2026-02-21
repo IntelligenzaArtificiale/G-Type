@@ -2,10 +2,10 @@
 // Interactive setup wizard for first-run. No manual file editing required.
 
 use anyhow::{Context, Result};
+use dialoguer::{Input, Select, theme::ColorfulTheme};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use tracing::{debug, info};
 
@@ -17,8 +17,6 @@ pub struct Config {
     pub model: String,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
-    #[serde(default = "default_injection_threshold")]
-    pub injection_threshold: usize,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 }
@@ -29,10 +27,6 @@ fn default_model() -> String {
 
 fn default_hotkey() -> String {
     "ctrl+shift+space".into()
-}
-
-fn default_injection_threshold() -> usize {
-    80
 }
 
 fn default_timeout_secs() -> u64 {
@@ -105,9 +99,6 @@ pub fn load() -> Result<Config> {
 /// Run the interactive first-time setup. Prompts for API key in the terminal.
 /// Called automatically on first run, or explicitly via `g-type setup`.
 pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
-
     println!("\x1b[36m╔══════════════════════════════════════════════╗\x1b[0m");
     println!("\x1b[36m║         G-Type — First Time Setup            ║\x1b[0m");
     println!("\x1b[36m╚══════════════════════════════════════════════╝\x1b[0m");
@@ -116,28 +107,48 @@ pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
     println!("  Get one free at: \x1b[4mhttps://aistudio.google.com/apikey\x1b[0m");
     println!();
 
+    let theme = ColorfulTheme::default();
+
     // API Key
-    let api_key = prompt_required(&mut reader, "  Gemini API Key: ")?;
+    let api_key: String = Input::with_theme(&theme)
+        .with_prompt("Gemini API Key")
+        .validate_with(|input: &String| -> Result<(), &str> {
+            if input.trim().is_empty() {
+                Err("API Key cannot be empty")
+            } else if !input.starts_with("AIzaSy") {
+                Err("Invalid API Key format. Gemini keys usually start with 'AIzaSy'")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?;
 
-    // Model (with default)
-    let model = prompt_with_default(
-        &mut reader,
-        "  Model",
-        &default_model(),
-    )?;
+    // Model Selection
+    let models = vec![
+        "models/gemini-2.0-flash",
+        "models/gemini-2.0-flash-lite",
+        "models/gemini-2.0-pro-exp",
+        "models/gemini-1.5-pro",
+        "models/gemini-1.5-flash",
+    ];
+    
+    let model_idx = Select::with_theme(&theme)
+        .with_prompt("Select Gemini Model")
+        .default(0)
+        .items(&models)
+        .interact()?;
+    let model = models[model_idx].to_string();
 
-    // Hotkey (with default)
-    let hotkey = prompt_with_default(
-        &mut reader,
-        "  Hotkey",
-        &default_hotkey(),
-    )?;
+    // Hotkey
+    let hotkey: String = Input::with_theme(&theme)
+        .with_prompt("Hotkey")
+        .default(default_hotkey())
+        .interact_text()?;
 
     let cfg = Config {
         api_key,
         model,
         hotkey,
-        injection_threshold: default_injection_threshold(),
         timeout_secs: default_timeout_secs(),
     };
 
@@ -149,43 +160,6 @@ pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
     println!();
 
     Ok(cfg)
-}
-
-/// Prompt for a required value (cannot be empty).
-fn prompt_required(reader: &mut impl BufRead, prompt: &str) -> Result<String> {
-    loop {
-        print!("{}", prompt);
-        io::stdout().flush().context("Failed to flush stdout")?;
-
-        let mut input = String::new();
-        reader.read_line(&mut input).context("Failed to read input")?;
-        let trimmed = input.trim().to_string();
-
-        if !trimmed.is_empty() {
-            return Ok(trimmed);
-        }
-        println!("  \x1b[33m⚠ This field is required.\x1b[0m");
-    }
-}
-
-/// Prompt with a default value shown in brackets. Enter accepts the default.
-fn prompt_with_default(
-    reader: &mut impl BufRead,
-    label: &str,
-    default: &str,
-) -> Result<String> {
-    print!("{} [{}]: ", label, default);
-    io::stdout().flush().context("Failed to flush stdout")?;
-
-    let mut input = String::new();
-    reader.read_line(&mut input).context("Failed to read input")?;
-    let trimmed = input.trim();
-
-    if trimmed.is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
 }
 
 // ── Save / Update ──────────────────────────────────────────
@@ -220,7 +194,6 @@ pub fn set_api_key(key: &str) -> Result<()> {
             api_key: String::new(),
             model: default_model(),
             hotkey: default_hotkey(),
-            injection_threshold: default_injection_threshold(),
             timeout_secs: default_timeout_secs(),
         }
     };
@@ -241,7 +214,6 @@ mod tests {
             api_key: "test-key-123".into(),
             model: default_model(),
             hotkey: default_hotkey(),
-            injection_threshold: 80,
             timeout_secs: 3,
         };
         let url = cfg.api_url();
@@ -257,33 +229,5 @@ mod tests {
         let cfg: Config = toml::from_str(raw).unwrap();
         assert_eq!(cfg.model, "models/gemini-2.0-flash");
         assert_eq!(cfg.hotkey, "ctrl+shift+space");
-        assert_eq!(cfg.injection_threshold, 80);
-    }
-
-    #[test]
-    fn test_prompt_with_default_empty() {
-        let input = b"\n";
-        let mut reader = &input[..];
-        let result = prompt_with_default(&mut reader, "Test", "default_val");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "default_val");
-    }
-
-    #[test]
-    fn test_prompt_with_default_custom() {
-        let input = b"custom_val\n";
-        let mut reader = &input[..];
-        let result = prompt_with_default(&mut reader, "Test", "default_val");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "custom_val");
-    }
-
-    #[test]
-    fn test_prompt_required() {
-        let input = b"my-api-key\n";
-        let mut reader = &input[..];
-        let result = prompt_required(&mut reader, "Key: ");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "my-api-key");
     }
 }
