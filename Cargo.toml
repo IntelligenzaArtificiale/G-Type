@@ -1,6 +1,6 @@
 [package]
 name = "g-type"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Global walkie-talkie dictation daemon powered by Gemini REST API"
 license = "MIT"
@@ -27,8 +27,8 @@ rdev = "0.5"
 # Text injection (keystroke emulation)
 enigo = { version = "0.2", features = ["serde"] }
 
-# Clipboard access
-arboard = "3"
+# Low-level libc (stderr redirect for ALSA noise suppression)
+libc = "0.2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

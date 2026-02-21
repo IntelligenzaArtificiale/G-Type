@@ -217,7 +217,7 @@ impl HookState {
             let all_mods = self.hotkey.modifiers.iter().all(|m| self.held_modifiers.contains(m));
             if !self.trigger_held || !all_mods {
                 self.recording = false;
-                info!(hotkey = %self.hotkey.label, "Hotkey released — STOP recording");
+                debug!(hotkey = %self.hotkey.label, "Hotkey released");
                 if self.tx.blocking_send(InputSignal::Stop).is_err() {
                     error!("Input channel closed, cannot send Stop signal");
                 }
@@ -249,7 +249,7 @@ pub fn spawn_listener(tx: InputTx, shutdown: Arc<AtomicBool>, hotkey: Hotkey) ->
     let handle = std::thread::Builder::new()
         .name("g-type-input".into())
         .spawn(move || {
-            info!(hotkey = %label, "Global keyboard listener started");
+            debug!(hotkey = %label, "Global keyboard listener started");
             let state = Arc::new(std::sync::Mutex::new(HookState::new(tx, hotkey)));
 
             let callback = move |event: Event| {

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::audio;
 use crate::config::Config;
@@ -62,7 +62,7 @@ pub async fn run(config: Config) -> Result<()> {
     let _input_handle = crate::input::spawn_listener(input_tx, shutdown_clone, hotkey)
         .context("Failed to spawn keyboard listener")?;
 
-    info!(hotkey = %hotkey_label, "G-Type daemon running. Hold hotkey to dictate.");
+    info!(hotkey = %hotkey_label, "Ready — hold hotkey to dictate.");
 
     let mut state = State::Idle;
 
@@ -89,13 +89,13 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 /// Idle state: block until we receive a Start signal.
-async fn state_idle(input_rx: &mut InputRx, hotkey_label: &str) -> State {
-    info!(hotkey = %hotkey_label, "State: IDLE — waiting for hotkey...");
+async fn state_idle(input_rx: &mut InputRx, _hotkey_label: &str) -> State {
+    debug!("Idle, waiting for hotkey...");
 
     loop {
         match input_rx.recv().await {
             Some(InputSignal::Start) => {
-                info!("State: IDLE → RECORDING");
+                info!("🎤 Recording...");
                 return State::Recording;
             }
             Some(InputSignal::Stop) => {
@@ -115,7 +115,7 @@ async fn state_idle(input_rx: &mut InputRx, hotkey_label: &str) -> State {
 /// Recording state: capture audio to buffer, then send to Gemini REST API.
 /// Handles the full lifecycle: Recording → Processing → Injecting → Idle.
 async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label: &str) -> State {
-    info!("State: RECORDING — capturing audio to buffer");
+    debug!("Capturing audio to buffer");
 
     // Audio capture channel — uses std::sync::mpsc (NOT tokio) because
     // the cpal audio callback runs on a non-tokio OS thread.
@@ -176,22 +176,13 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         }
     };
 
-    info!(
-        samples = all_samples.len(),
-        duration_secs = format!("{:.1}", all_samples.len() as f64 / 16_000.0),
-        "State: RECORDING → PROCESSING"
-    );
+    let duration = all_samples.len() as f64 / 16_000.0;
+    info!(duration = format!("{:.1}s", duration), "⏹ Stopped. Transcribing...");
 
     if all_samples.is_empty() {
         warn!("No audio captured, skipping transcription");
         return State::Idle;
     }
-
-    // Send all audio to Gemini REST API for transcription
-    info!(
-        samples = all_samples.len(),
-        "State: PROCESSING — sending audio to Gemini API..."
-    );
 
     let transcription = match network::transcribe(config, &all_samples).await {
         Ok(text) => text,
@@ -208,10 +199,6 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
     }
 
     // Inject the transcribed text
-    info!(
-        text_len = transcription.len(),
-        "State: PROCESSING → INJECTING"
-    );
 
     // Run injection on a blocking thread to avoid blocking the async runtime
     let threshold = config.injection_threshold;
@@ -223,10 +210,7 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
 
     match inject_result {
         Ok(Ok(())) => {
-            info!(
-                text_preview = %truncate(&transcription, 60),
-                "Text injected successfully"
-            );
+            info!(text = %truncate(&transcription, 80), "✅ Injected");
         }
         Ok(Err(e)) => {
             error!(%e, "Text injection failed");
@@ -236,7 +220,6 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         }
     }
 
-    info!("State: INJECTING → IDLE");
     State::Idle
 }
 

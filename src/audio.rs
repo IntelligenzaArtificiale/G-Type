@@ -7,15 +7,49 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SampleRate, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// Suppress noisy ALSA/JACK/OSS error messages printed to stderr during device enumeration.
 /// These are harmless warnings from ALSA probing devices that don't exist (JACK, OSS, etc.).
-fn suppress_alsa_stderr() {
-    // Set env vars that quiet ALSA/PipeWire/JACK noise
+/// We redirect file descriptor 2 (stderr) to /dev/null for the duration of enumeration.
+#[cfg(target_os = "linux")]
+fn suppress_alsa_stderr() -> Option<StderrGuard> {
+    use std::os::unix::io::AsRawFd;
     std::env::set_var("PIPEWIRE_LOG_LEVEL", "0");
-    // The ALSA error handler can only be overridden via C API (snd_lib_error_set_handler),
-    // but we can at least redirect stderr temporarily for the enumeration.
+    // Duplicate current stderr so we can restore it later
+    let orig_fd = unsafe { libc::dup(2) };
+    if orig_fd < 0 {
+        return None;
+    }
+    // Open /dev/null and redirect stderr to it
+    if let Ok(devnull) = std::fs::File::open("/dev/null") {
+        unsafe {
+            libc::dup2(devnull.as_raw_fd(), 2);
+        }
+        Some(StderrGuard { orig_fd })
+    } else {
+        unsafe { libc::close(orig_fd); }
+        None
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn suppress_alsa_stderr() -> Option<StderrGuard> {
+    None
+}
+
+/// RAII guard that restores stderr when dropped.
+struct StderrGuard {
+    orig_fd: i32,
+}
+
+impl Drop for StderrGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::dup2(self.orig_fd, 2);
+            libc::close(self.orig_fd);
+        }
+    }
 }
 
 /// A chunk of 16kHz i16 mono PCM data (100ms = 1600 samples).
@@ -39,14 +73,14 @@ const SAMPLES_PER_CHUNK: usize = (TARGET_RATE * CHUNK_MS / 1000) as usize;
 /// (which are almost always external microphones), falling back to any hw: device,
 /// and only using "default" as a last resort.
 fn default_input_device() -> Result<Device> {
-    suppress_alsa_stderr();
+    let _stderr_guard = suppress_alsa_stderr();
     let host = cpal::default_host();
-    info!(host = host.id().name(), "Audio host selected");
+    debug!(host = host.id().name(), "Audio host selected");
 
     // Read /proc/asound/cards to identify which ALSA cards are USB
     let usb_card_names = detect_usb_alsa_cards();
     if !usb_card_names.is_empty() {
-        info!(usb_cards = ?usb_card_names, "Detected USB audio cards");
+        debug!(usb_cards = ?usb_card_names, "Detected USB audio cards");
     }
 
     if let Ok(input_devices) = host.input_devices() {
@@ -95,10 +129,10 @@ fn default_input_device() -> Result<Device> {
         if let Some(device) = best {
             let name = device.name().unwrap_or_else(|_| "unknown".into());
             let is_usb = usb_hw_devices.first().map(|d| std::ptr::eq(*d, *device)).unwrap_or(false);
-            info!(
+            debug!(
                 device = name,
                 usb = is_usb,
-                "Selected hardware input device (bypassing ALSA default)"
+                "Selected hardware input device"
             );
             return Ok((*device).clone());
         }
@@ -107,7 +141,7 @@ fn default_input_device() -> Result<Device> {
     // Fallback to the default
     let device = host.default_input_device()
         .context("No audio input device found. Is a microphone connected?")?;
-    info!(
+    debug!(
         device = device.name().unwrap_or_else(|_| "unknown".into()),
         "Using default input device (fallback)"
     );
@@ -147,11 +181,11 @@ fn pick_input_config(device: &Device) -> Result<(StreamConfig, SampleFormat)> {
     if let Ok(default_cfg) = device.default_input_config() {
         let fmt = default_cfg.sample_format();
         let config: StreamConfig = default_cfg.into();
-        info!(
+        debug!(
             rate = config.sample_rate.0,
             channels = config.channels,
             format = ?fmt,
-            "Using device default config (will downsample/mono-mix in software)"
+            "Device config"
         );
         return Ok((config, fmt));
     }
@@ -342,7 +376,7 @@ pub fn start_capture(
     let source_rate = config.sample_rate.0;
     let source_channels = config.channels;
 
-    info!(
+    debug!(
         device = device.name().unwrap_or_else(|_| "unknown".into()),
         rate = source_rate,
         channels = source_channels,
@@ -474,7 +508,7 @@ pub fn start_capture(
                     error!(%e, "Failed to start audio stream");
                     return;
                 }
-                info!("Audio stream playing — callbacks should start arriving");
+                debug!("Audio stream started");
 
                 // Keep thread alive while recording, log stats periodically
                 let mut tick = 0u32;
@@ -492,12 +526,12 @@ pub fn start_capture(
                     }
                 }
 
-                info!(
+                debug!(
                     callbacks = callback_count.load(Ordering::Relaxed),
                     samples_fed = samples_fed.load(Ordering::Relaxed),
                     chunks_sent = chunks_sent.load(Ordering::Relaxed),
                     send_errors = send_errors.load(Ordering::Relaxed),
-                    "Audio capture stopped — final stats"
+                    "Audio capture stopped"
                 );
                 drop(stream);
             }
@@ -512,7 +546,7 @@ pub fn start_capture(
 
 /// List all available audio input devices.
 pub fn list_input_devices() -> Result<Vec<(String, Vec<String>)>> {
-    suppress_alsa_stderr();
+    let _stderr_guard = suppress_alsa_stderr();
     let host = cpal::default_host();
     let default_name = host.default_input_device()
         .and_then(|d| d.name().ok())

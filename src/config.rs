@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Application configuration persisted to disk.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -96,7 +96,7 @@ pub fn load() -> Result<Config> {
         return interactive_setup(&path);
     }
 
-    info!(path = %path.display(), "Config loaded");
+    debug!(path = %path.display(), "Config loaded");
     Ok(cfg)
 }
 

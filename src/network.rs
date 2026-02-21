@@ -7,7 +7,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use reqwest::Client;
 use serde_json::{Value, json};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::config::Config;
 
@@ -31,10 +31,10 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
     }
 
     let duration_secs = samples.len() as f64 / 16_000.0;
-    info!(
+    debug!(
         samples = samples.len(),
         duration_secs = format!("{:.1}", duration_secs),
-        "Transcribing audio via Gemini REST API..."
+        "Sending audio to Gemini API"
     );
 
     // Step 1: Encode PCM samples as WAV in memory
@@ -86,7 +86,7 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
 
     let transcription = extract_text(&parsed)?;
 
-    info!(
+    debug!(
         text_len = transcription.len(),
         text_preview = %truncate_str(&transcription, 80),
         "Transcription received"

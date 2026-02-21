@@ -13,7 +13,7 @@ mod input;
 mod network;
 
 use anyhow::Result;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 fn print_usage() {
@@ -164,10 +164,9 @@ async fn main() -> Result<()> {
         }
     };
 
-    info!(
+    debug!(
         model = %cfg.model,
         hotkey = %cfg.hotkey,
-        threshold = cfg.injection_threshold,
         "Configuration loaded"
     );
 
