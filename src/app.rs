@@ -117,8 +117,8 @@ async fn state_idle(input_rx: &mut InputRx, hotkey_label: &str) -> State {
 async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label: &str) -> State {
     info!("State: RECORDING — capturing audio to buffer");
 
-    // Audio capture channel
-    let (audio_tx, mut audio_rx) = mpsc::channel::<audio::AudioChunk>(64);
+    // Audio capture channel (large buffer so the audio thread never blocks)
+    let (audio_tx, mut audio_rx) = mpsc::channel::<audio::AudioChunk>(512);
 
     // Atomic flag to control audio capture thread
     let recording_flag = Arc::new(AtomicBool::new(true));
@@ -131,54 +131,54 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         return State::Idle;
     }
 
-    // Accumulate all audio samples in memory
-    let mut all_samples: Vec<i16> = Vec::new();
+    // Spawn a background task that accumulates audio chunks.
+    // It returns the collected samples when the audio channel closes.
+    let collector_handle = tokio::spawn(async move {
+        let mut all_samples = Vec::<i16>::new();
+        while let Some(chunk) = audio_rx.recv().await {
+            all_samples.extend_from_slice(&chunk);
+        }
+        all_samples
+    });
 
-    // Collect audio chunks until Stop signal
+    // Wait for Stop signal from keyboard (this blocks until hotkey release)
     loop {
-        tokio::select! {
-            signal = input_rx.recv() => {
-                match signal {
-                    Some(InputSignal::Stop) => {
-                        info!(
-                            samples = all_samples.len(),
-                            duration_secs = format!("{:.1}", all_samples.len() as f64 / 16_000.0),
-                            "State: RECORDING → PROCESSING"
-                        );
-                        break;
-                    }
-                    Some(InputSignal::Start) => {
-                        // Double press while recording, ignore
-                        continue;
-                    }
-                    None => {
-                        error!("Input channel closed during recording");
-                        recording_flag.store(false, Ordering::Relaxed);
-                        return State::Idle;
-                    }
-                }
+        match input_rx.recv().await {
+            Some(InputSignal::Stop) => {
+                break;
             }
-            chunk = audio_rx.recv() => {
-                match chunk {
-                    Some(pcm_data) => {
-                        all_samples.extend_from_slice(&pcm_data);
-                    }
-                    None => {
-                        // Audio channel closed unexpectedly
-                        break;
-                    }
-                }
+            Some(InputSignal::Start) => {
+                // Double press while recording, ignore
+                continue;
+            }
+            None => {
+                error!("Input channel closed during recording");
+                recording_flag.store(false, Ordering::Relaxed);
+                collector_handle.abort();
+                return State::Idle;
             }
         }
     }
 
-    // Stop audio capture
+    // Stop audio capture — this causes the audio thread to exit its loop,
+    // drop the audio_tx sender, which closes the channel, which makes
+    // the collector task finish and return the accumulated samples.
     recording_flag.store(false, Ordering::Relaxed);
 
-    // Drain any remaining chunks still in the channel
-    while let Ok(chunk) = audio_rx.try_recv() {
-        all_samples.extend_from_slice(&chunk);
-    }
+    // Wait for the collector to finish (it will end once audio_tx is dropped)
+    let all_samples = match collector_handle.await {
+        Ok(samples) => samples,
+        Err(e) => {
+            error!(%e, "Audio collector task failed");
+            return State::Idle;
+        }
+    };
+
+    info!(
+        samples = all_samples.len(),
+        duration_secs = format!("{:.1}", all_samples.len() as f64 / 16_000.0),
+        "State: RECORDING → PROCESSING"
+    );
 
     if all_samples.is_empty() {
         warn!("No audio captured, skipping transcription");
