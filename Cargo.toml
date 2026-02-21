@@ -1,0 +1,63 @@
+[package]
+name = "g-type"
+version = "0.1.0"
+edition = "2021"
+description = "Global walkie-talkie dictation daemon powered by Gemini 2.0 Flash Live API"
+license = "MIT"
+repository = "https://github.com/IntelligenzaArtificiale/g-type"
+readme = "README.md"
+
+[[bin]]
+name = "g-type"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# WebSocket + TLS
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# Audio capture
+cpal = "0.15"
+
+# Global keyboard hooks
+rdev = "0.5"
+
+# Text injection (keystroke emulation)
+enigo = { version = "0.2", features = ["serde"] }
+
+# Clipboard access
+arboard = "3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Error handling
+anyhow = "1"
+
+# Logging / Telemetry
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Base64 encoding for audio chunks
+base64 = "0.22"
+
+# Config directory resolution
+directories = "5"
+
+# URL / HTTP (for TLS connector)
+native-tls = "0.2"
+url = "2"
+
+# Async futures utilities
+futures-util = { version = "0.3", features = ["sink"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
