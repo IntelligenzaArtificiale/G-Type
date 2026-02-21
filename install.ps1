@@ -113,7 +113,7 @@ function Main {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
     Write-Host "  Installation complete!" -ForegroundColor Green
     Write-Host "  Run 'g-type' to start the daemon." -ForegroundColor Green
-    Write-Host "  Hold CTRL+T to dictate anywhere." -ForegroundColor Green
+    Write-Host "  Hold your hotkey (default: CTRL+SHIFT+SPACE) to dictate." -ForegroundColor Green
     Write-Host "" -ForegroundColor Green
     Write-Host "  Useful commands:" -ForegroundColor Green
     Write-Host "    g-type setup     Re-run setup wizard" -ForegroundColor Green

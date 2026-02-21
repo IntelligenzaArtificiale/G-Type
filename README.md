@@ -37,11 +37,20 @@ Powered by Google Gemini REST API. Single static binary. ~5 MB.
 curl -sSf https://raw.githubusercontent.com/IntelligenzaArtificiale/g-type/main/install.sh | bash
 ```
 
-This will automatically:
+### One-click install (Windows)
+
+Open PowerShell and run:
+
+```powershell
+irm https://raw.githubusercontent.com/IntelligenzaArtificiale/g-type/main/install.ps1 | iex
+```
+
+Both installers will automatically:
 - Detect your OS and architecture
 - Install required system dependencies (Linux)
 - Download the latest pre-built binary
-- Run the interactive setup wizard
+- Add it to your PATH
+- Run the interactive setup wizard on first run
 
 ### Pre-built binaries
 
