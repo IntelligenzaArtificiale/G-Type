@@ -153,6 +153,17 @@ fn f32_to_i16(s: f32) -> i16 {
     (clamped * i16::MAX as f32) as i16
 }
 
+/// Convert u8 sample (unsigned, center at 128) to i16.
+fn u8_to_i16(s: u8) -> i16 {
+    // U8 audio: 0..255, 128 = silence
+    ((s as i32 - 128) * 256) as i16
+}
+
+/// Convert i32 sample to i16 (shift right 16 bits).
+fn i32_to_i16(s: i32) -> i16 {
+    (s >> 16) as i16
+}
+
 /// Start audio capture on a dedicated OS thread.
 /// Returns immediately. Audio chunks flow through `tx`.
 /// Set `running` to false to stop capture.
@@ -229,6 +240,52 @@ pub fn start_capture(
                     None,
                 )
             }
+            SampleFormat::U8 => {
+                let ds_clone3 = downsampler.clone();
+                let tx_clone3 = tx.clone();
+                let running_clone3 = running.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[u8], _: &cpal::InputCallbackInfo| {
+                        if !running_clone3.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let i16_data: Vec<i16> = data.iter().map(|&s| u8_to_i16(s)).collect();
+                        if let Ok(mut ds) = ds_clone3.lock() {
+                            for chunk in ds.feed(&i16_data) {
+                                if tx_clone3.blocking_send(chunk).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    },
+                    err_callback,
+                    None,
+                )
+            }
+            SampleFormat::I32 => {
+                let ds_clone4 = downsampler.clone();
+                let tx_clone4 = tx.clone();
+                let running_clone4 = running.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[i32], _: &cpal::InputCallbackInfo| {
+                        if !running_clone4.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let i16_data: Vec<i16> = data.iter().map(|&s| i32_to_i16(s)).collect();
+                        if let Ok(mut ds) = ds_clone4.lock() {
+                            for chunk in ds.feed(&i16_data) {
+                                if tx_clone4.blocking_send(chunk).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    },
+                    err_callback,
+                    None,
+                )
+            }
             other => {
                 error!(?other, "Unsupported sample format");
                 return;
@@ -283,5 +340,19 @@ mod tests {
         assert_eq!(f32_to_i16(-1.0), -i16::MAX);
         assert_eq!(f32_to_i16(0.0), 0);
         assert_eq!(f32_to_i16(2.0), i16::MAX); // clamp
+    }
+
+    #[test]
+    fn test_u8_to_i16() {
+        assert_eq!(u8_to_i16(128), 0);       // silence
+        assert_eq!(u8_to_i16(0), -32768);    // min
+        assert_eq!(u8_to_i16(255), 32512);   // near max
+    }
+
+    #[test]
+    fn test_i32_to_i16() {
+        assert_eq!(i32_to_i16(0), 0);
+        assert_eq!(i32_to_i16(i32::MAX), i16::MAX);
+        assert_eq!(i32_to_i16(i32::MIN), i16::MIN);
     }
 }

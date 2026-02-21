@@ -11,7 +11,7 @@ use tracing::{error, info, warn};
 use crate::audio;
 use crate::config::Config;
 use crate::injector;
-use crate::input::{InputRx, InputSignal, InputTx};
+use crate::input::{self, InputRx, InputSignal, InputTx};
 use crate::network;
 
 /// FSM states for the daemon.
@@ -49,25 +49,30 @@ impl std::fmt::Display for State {
 pub async fn run(config: Config) -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
 
+    // Parse the configured hotkey
+    let hotkey = input::parse_hotkey(&config.hotkey)
+        .context("Invalid hotkey in config")?;
+    let hotkey_label = hotkey.label.clone();
+
     // Channel for keyboard input signals (Start/Stop)
     let (input_tx, mut input_rx): (InputTx, InputRx) = mpsc::channel(32);
 
     // Spawn the global keyboard listener on a dedicated OS thread
     let shutdown_clone = shutdown.clone();
-    let _input_handle = crate::input::spawn_listener(input_tx, shutdown_clone)
+    let _input_handle = crate::input::spawn_listener(input_tx, shutdown_clone, hotkey)
         .context("Failed to spawn keyboard listener")?;
 
-    info!("G-Type daemon running. Press CTRL+T to start dictation.");
+    info!(hotkey = %hotkey_label, "G-Type daemon running. Hold hotkey to dictate.");
 
     let mut state = State::Idle;
 
     loop {
         match state {
             State::Idle => {
-                state = state_idle(&mut input_rx).await;
+                state = state_idle(&mut input_rx, &hotkey_label).await;
             }
             State::Recording => {
-                state = state_recording(&config, &mut input_rx).await;
+                state = state_recording(&config, &mut input_rx, &hotkey_label).await;
             }
             State::Processing => {
                 // Processing is handled inline within state_recording
@@ -84,8 +89,8 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 /// Idle state: block until we receive a Start signal.
-async fn state_idle(input_rx: &mut InputRx) -> State {
-    info!("State: IDLE — waiting for CTRL+T...");
+async fn state_idle(input_rx: &mut InputRx, hotkey_label: &str) -> State {
+    info!(hotkey = %hotkey_label, "State: IDLE — waiting for hotkey...");
 
     loop {
         match input_rx.recv().await {
@@ -109,7 +114,7 @@ async fn state_idle(input_rx: &mut InputRx) -> State {
 
 /// Recording state: start audio capture + WebSocket, stream until Stop signal.
 /// Handles the full lifecycle: Recording → Processing → Injecting → Idle.
-async fn state_recording(config: &Config, input_rx: &mut InputRx) -> State {
+async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label: &str) -> State {
     info!("State: RECORDING — capturing audio and streaming to Gemini");
 
     // Audio capture channel

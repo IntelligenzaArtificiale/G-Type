@@ -261,7 +261,7 @@ mod tests {
         let config = Config {
             api_key: "test".into(),
             model: "models/gemini-2.0-flash".into(),
-            hotkey: "ctrl+t".into(),
+            hotkey: "ctrl+shift+space".into(),
             injection_threshold: 80,
             timeout_secs: 3,
         };

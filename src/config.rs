@@ -28,7 +28,7 @@ fn default_model() -> String {
 }
 
 fn default_hotkey() -> String {
-    "ctrl+t".into()
+    "ctrl+shift+space".into()
 }
 
 fn default_injection_threshold() -> usize {
@@ -251,6 +251,7 @@ mod tests {
         let raw = r#"api_key = "abc""#;
         let cfg: Config = toml::from_str(raw).unwrap();
         assert_eq!(cfg.model, "models/gemini-2.0-flash");
+        assert_eq!(cfg.hotkey, "ctrl+shift+space");
         assert_eq!(cfg.injection_threshold, 80);
     }
 

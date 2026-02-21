@@ -26,7 +26,7 @@ fn print_usage() {
     eprintln!("  config      Show config file location");
     eprintln!("  help        Show this message");
     eprintln!();
-    eprintln!("Hold CTRL+T to dictate anywhere.");
+    eprintln!("Hold your hotkey (default: CTRL+SHIFT+SPACE) to dictate anywhere.");
 }
 
 #[tokio::main]
