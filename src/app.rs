@@ -97,7 +97,7 @@ pub async fn run(config: Config) -> Result<()> {
 
         match state {
             State::Idle => {
-                state = state_idle(&mut input_rx, &hotkey_label).await;
+                state = state_idle(&mut input_rx, &hotkey_label, &config).await;
             }
             State::Recording => {
                 state = state_recording(&config, &mut input_rx, &hotkey_label).await;
@@ -117,14 +117,16 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 /// Idle state: block until we receive a Start signal.
-async fn state_idle(input_rx: &mut InputRx, _hotkey_label: &str) -> State {
+async fn state_idle(input_rx: &mut InputRx, _hotkey_label: &str, config: &Config) -> State {
     debug!("Idle, waiting for hotkey...");
 
     loop {
         match input_rx.recv().await {
             Some(InputSignal::Start) => {
                 info!("🎤 Recording...");
-                crate::audio_feedback::play_start_beep();
+                if config.sound_enabled {
+                    crate::audio_feedback::play_start_beep();
+                }
                 return State::Recording;
             }
             Some(InputSignal::Stop) => {
@@ -212,7 +214,9 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         duration = format!("{:.1}s", duration),
         "⏹ Stopped. Transcribing..."
     );
-    crate::audio_feedback::play_stop_beep();
+    if config.sound_enabled {
+        crate::audio_feedback::play_stop_beep();
+    }
 
     if all_samples.is_empty() {
         warn!("No audio captured, skipping transcription");
@@ -224,7 +228,9 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         Err(e) => {
             error!(%e, "Transcription failed");
             warn!("Returning to idle due to transcription failure");
-            crate::audio_feedback::play_error_beep();
+            if config.sound_enabled {
+                crate::audio_feedback::play_error_beep();
+            }
             return State::Idle;
         }
     };

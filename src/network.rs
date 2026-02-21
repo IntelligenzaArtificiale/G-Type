@@ -58,7 +58,7 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
 
     // Step 2: Build the API request
     let url = config.api_url();
-    let body = build_request_body(&wav_b64);
+    let body = build_request_body(&wav_b64, &config.language);
 
     debug!(model = %config.model, "Sending request to Gemini API");
 
@@ -113,12 +113,13 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
 }
 
 /// Build the JSON body for Gemini generateContent with inline audio.
-fn build_request_body(wav_b64: &str) -> Value {
+fn build_request_body(wav_b64: &str, language: &str) -> Value {
+    let prompt = crate::config::transcription_prompt(language);
     json!({
         "contents": [{
             "parts": [
                 {
-                    "text": "Trascrivi esattamente ciò che viene detto in questo audio, parola per parola. Non aggiungere commenti, non rispondere a domande, non inventare punteggiatura. Restituisci SOLO il testo dettato. Se l'audio è silenzioso o incomprensibile, rispondi con una stringa vuota."
+                    "text": prompt
                 },
                 {
                     "inlineData": {
@@ -258,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body() {
-        let body = build_request_body("dGVzdA==");
+        let body = build_request_body("dGVzdA==", "auto");
         assert_eq!(
             body["contents"][0]["parts"][1]["inlineData"]["mimeType"],
             "audio/wav"

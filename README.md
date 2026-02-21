@@ -88,6 +88,19 @@ On first launch, G-Type runs an interactive setup wizard:
     models/gemini-1.5-pro
     models/gemini-1.5-flash
 
+? 🌍 Transcription Language:
+  > Auto-detect  (auto)
+    Italiano  (it)
+    English  (en)
+    Español  (es)
+    Français  (fr)
+    Deutsch  (de)
+    ...
+
+? 🔊 Enable sound feedback?
+  > Yes — play beeps on start/stop
+    No — silent mode
+
 ⌨️ Press your desired hotkey combo (e.g. hold Ctrl+Shift+Space)...
   Captured hotkey: ctrl+shift+space
 
@@ -123,12 +136,14 @@ Config file locations:
 | macOS   | `~/Library/Application Support/g-type/config.toml` |
 | Windows | `%APPDATA%\g-type\config.toml`                 |
 
-| Key            | Default                   | Description                    |
-|----------------|---------------------------|--------------------------------|
-| `api_key`      | —                         | Google Gemini API key (required)|
-| `model`        | `models/gemini-2.0-flash` | Gemini model identifier        |
-| `hotkey`       | `ctrl+shift+space`        | Trigger key combination        |
-| `timeout_secs` | `10`                      | HTTP request timeout (seconds) |
+| Key              | Default                   | Description                    |
+|------------------|---------------------------|--------------------------------|
+| `api_key`        | —                         | Google Gemini API key (required)|
+| `model`          | `models/gemini-2.0-flash` | Gemini model identifier        |
+| `hotkey`         | `ctrl+shift+space`        | Trigger key combination        |
+| `language`       | `auto`                    | Transcription language (auto, it, en, es, fr, de, ...) |
+| `sound_enabled`  | `true`                    | Play beeps on record start/stop |
+| `timeout_secs`   | `10`                      | HTTP request timeout (seconds) |
 
 ## Architecture
 

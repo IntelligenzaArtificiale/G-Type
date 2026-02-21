@@ -22,6 +22,10 @@ pub struct Config {
     pub hotkey: String,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default = "default_sound_enabled")]
+    pub sound_enabled: bool,
 }
 
 fn default_model() -> String {
@@ -34,6 +38,52 @@ fn default_hotkey() -> String {
 
 fn default_timeout_secs() -> u64 {
     10
+}
+
+fn default_language() -> String {
+    "auto".into()
+}
+
+fn default_sound_enabled() -> bool {
+    true
+}
+
+/// Available languages for transcription.
+const LANGUAGES: &[(&str, &str)] = &[
+    ("auto", "Auto-detect"),
+    ("it", "Italiano"),
+    ("en", "English"),
+    ("es", "Español"),
+    ("fr", "Français"),
+    ("de", "Deutsch"),
+    ("pt", "Português"),
+    ("ja", "日本語"),
+    ("zh", "中文"),
+    ("ko", "한국어"),
+    ("ar", "العربية"),
+    ("ru", "Русский"),
+    ("hi", "हिन्दी"),
+];
+
+/// Get the transcription prompt for the configured language.
+pub fn transcription_prompt(language: &str) -> String {
+    let lang_instruction = match language {
+        "auto" | "" => String::new(),
+        code => {
+            let name = LANGUAGES
+                .iter()
+                .find(|(c, _)| *c == code)
+                .map(|(_, n)| *n)
+                .unwrap_or(code);
+            format!(" The audio is in {name} ({code}). Transcribe in that language.")
+        }
+    };
+    format!(
+        "Trascrivi esattamente ciò che viene detto in questo audio, parola per parola. \
+         Non aggiungere commenti, non rispondere a domande, non inventare punteggiatura. \
+         Restituisci SOLO il testo dettato. Se l'audio è silenzioso o incomprensibile, \
+         rispondi con una stringa vuota.{lang_instruction}"
+    )
 }
 
 impl Config {
@@ -167,7 +217,29 @@ pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
         .interact()?;
     let model = models[model_idx].to_string();
 
-    // ── Step 4: Hotkey — interactive capture ───────────────
+    // ── Step 4: Language ───────────────────────────────────
+    let lang_labels: Vec<String> = LANGUAGES
+        .iter()
+        .map(|(code, name)| format!("{name}  ({code})"))
+        .collect();
+
+    let lang_idx = Select::with_theme(&theme)
+        .with_prompt("🌍 Transcription Language")
+        .default(0)
+        .items(&lang_labels)
+        .interact()?;
+    let language = LANGUAGES[lang_idx].0.to_string();
+
+    // ── Step 5: Sound feedback ─────────────────────────────
+    let sound_options = ["Yes — play beeps on start/stop", "No — silent mode"];
+    let sound_idx = Select::with_theme(&theme)
+        .with_prompt("🔊 Enable sound feedback?")
+        .default(0)
+        .items(sound_options)
+        .interact()?;
+    let sound_enabled = sound_idx == 0;
+
+    // ── Step 6: Hotkey — interactive capture ───────────────
     println!();
     println!(
         "  {} Press your desired hotkey combo (e.g. hold Ctrl+Shift+Space)...",
@@ -188,6 +260,8 @@ pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
         model,
         hotkey,
         timeout_secs: default_timeout_secs(),
+        language,
+        sound_enabled,
     };
 
     save(&cfg, path)?;
@@ -456,6 +530,8 @@ pub fn set_api_key(key: &str) -> Result<()> {
             model: default_model(),
             hotkey: default_hotkey(),
             timeout_secs: default_timeout_secs(),
+            language: default_language(),
+            sound_enabled: default_sound_enabled(),
         }
     };
 
@@ -476,6 +552,8 @@ mod tests {
             model: default_model(),
             hotkey: default_hotkey(),
             timeout_secs: 3,
+            language: default_language(),
+            sound_enabled: default_sound_enabled(),
         };
         let url = cfg.api_url();
         // API key must NOT appear in the URL (sent via header).
@@ -492,6 +570,8 @@ mod tests {
         assert_eq!(cfg.model, "models/gemini-2.0-flash");
         assert_eq!(cfg.hotkey, "ctrl+shift+space");
         assert_eq!(cfg.timeout_secs, 10);
+        assert_eq!(cfg.language, "auto");
+        assert!(cfg.sound_enabled);
     }
 
     #[test]
@@ -516,6 +596,8 @@ timeout_secs = 30
             model: "models/gemini-2.0-flash".into(),
             hotkey: default_hotkey(),
             timeout_secs: 10,
+            language: default_language(),
+            sound_enabled: default_sound_enabled(),
         };
         let url = cfg.api_url();
         assert!(!url.contains("SECRET"), "API key must not appear in URL");
@@ -529,6 +611,8 @@ timeout_secs = 30
             model: "models/gemini-1.5-flash".into(),
             hotkey: default_hotkey(),
             timeout_secs: 10,
+            language: default_language(),
+            sound_enabled: default_sound_enabled(),
         };
         assert!(cfg.api_url().contains("gemini-1.5-flash:generateContent"));
     }
@@ -540,6 +624,8 @@ timeout_secs = 30
             model: "gemini-2.0-pro".into(),
             hotkey: default_hotkey(),
             timeout_secs: 10,
+            language: default_language(),
+            sound_enabled: default_sound_enabled(),
         };
         assert!(cfg.api_url().contains("gemini-2.0-pro:generateContent"));
     }

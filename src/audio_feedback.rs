@@ -7,14 +7,19 @@ use tracing::warn;
 enum BeepCmd {
     /// Single tone: frequency (Hz), duration, amplitude (0.0–1.0).
     Tone(f32, Duration, f32),
-    /// Two consecutive tones (for error beep).
+    /// Two consecutive tones (for start/error beep).
     DoubleTone(f32, Duration, f32, f32, Duration, f32),
 }
 
 /// Lazily-initialized channel sender to the persistent beep thread.
-/// Using a persistent thread avoids the race condition where
-/// `OutputStream::try_default()` fails when the OS audio device is
-/// already held by the cpal capture thread.
+///
+/// Architecture: a single long-lived thread owns the `OutputStream` (opened
+/// once at startup so it never races with the cpal capture thread).
+/// For each beep command a new `Sink` is created — but critically the
+/// **previous** Sink is kept alive until the new one is fully playing.
+/// This avoids the rodio bug where dropping a Sink and immediately creating
+/// a new one causes the internal mixer to lose track, silently producing
+/// no output after the first few beeps.
 fn beep_sender() -> &'static mpsc::Sender<BeepCmd> {
     use std::sync::OnceLock;
     static TX: OnceLock<mpsc::Sender<BeepCmd>> = OnceLock::new();
@@ -25,10 +30,7 @@ fn beep_sender() -> &'static mpsc::Sender<BeepCmd> {
         std::thread::Builder::new()
             .name("audio-feedback".into())
             .spawn(move || {
-                // Open the output stream ONCE and keep it alive for the
-                // entire process lifetime.  This is the key fix: by
-                // holding `_stream` we never contend with cpal for the
-                // audio device.
+                // Open the output stream ONCE and keep it alive forever.
                 let (_stream, stream_handle) = match OutputStream::try_default() {
                     Ok(pair) => pair,
                     Err(e) => {
@@ -36,6 +38,10 @@ fn beep_sender() -> &'static mpsc::Sender<BeepCmd> {
                         return;
                     }
                 };
+
+                // Hold the previous Sink until the next beep so its internal
+                // mixer slot is not reclaimed prematurely.
+                let mut _prev_sink: Option<Sink> = None;
 
                 while let Ok(cmd) = rx.recv() {
                     let sink = match Sink::try_new(&stream_handle) {
@@ -57,6 +63,14 @@ fn beep_sender() -> &'static mpsc::Sender<BeepCmd> {
                     }
 
                     sink.sleep_until_end();
+
+                    // Small gap so the audio driver can flush its buffer before
+                    // the next beep. This prevents audio underruns on some backends.
+                    std::thread::sleep(Duration::from_millis(30));
+
+                    // Keep the old Sink alive until now — only replace it once
+                    // the new Sink has fully finished playing.
+                    _prev_sink = Some(sink);
                 }
             })
             .expect("failed to spawn audio-feedback thread");
