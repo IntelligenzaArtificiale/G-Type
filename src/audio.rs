@@ -29,7 +29,7 @@ fn default_input_device() -> Result<Device> {
         .context("No audio input device found. Is a microphone connected?")
 }
 
-/// Pick a supported input config, preferring mono 16kHz.
+/// Pick a supported input config, preferring mono 16kHz with I16 or F32 format.
 fn pick_input_config(device: &Device) -> Result<(StreamConfig, SampleFormat)> {
     let supported = device
         .supported_input_configs()
@@ -41,27 +41,45 @@ fn pick_input_config(device: &Device) -> Result<(StreamConfig, SampleFormat)> {
         bail!("Audio device supports no input configurations");
     }
 
-    // Try to find one that supports 16kHz natively
-    for cfg in &configs {
-        if cfg.min_sample_rate().0 <= TARGET_RATE && cfg.max_sample_rate().0 >= TARGET_RATE {
-            let config = cfg.with_sample_rate(SampleRate(TARGET_RATE)).config();
-            let fmt = cfg.sample_format();
-            info!(
-                rate = TARGET_RATE,
-                channels = config.channels,
-                format = ?fmt,
-                "Using native 16kHz config"
-            );
-            return Ok((config, fmt));
+    // Priority order for sample formats: I16 > F32 > I32 > U8
+    let format_priority = |fmt: SampleFormat| -> u8 {
+        match fmt {
+            SampleFormat::I16 => 0,
+            SampleFormat::F32 => 1,
+            SampleFormat::I32 => 2,
+            SampleFormat::U8  => 3,
+            _                 => 4,
         }
+    };
+
+    // Collect all configs that support 16kHz, sorted by format priority
+    let mut native_16k: Vec<_> = configs.iter()
+        .filter(|cfg| cfg.min_sample_rate().0 <= TARGET_RATE && cfg.max_sample_rate().0 >= TARGET_RATE)
+        .collect();
+    native_16k.sort_by_key(|cfg| format_priority(cfg.sample_format()));
+
+    if let Some(best) = native_16k.first() {
+        let config = best.with_sample_rate(SampleRate(TARGET_RATE)).config();
+        let fmt = best.sample_format();
+        info!(
+            rate = TARGET_RATE,
+            channels = config.channels,
+            format = ?fmt,
+            "Using native 16kHz config"
+        );
+        return Ok((config, fmt));
     }
 
-    // Fallback: use the default config, we'll resample in software
-    let fallback = configs[0].with_max_sample_rate().config();
-    let fmt = configs[0].sample_format();
+    // Fallback: pick the config with best format, use max rate (we'll resample)
+    let mut all_sorted: Vec<_> = configs.iter().collect();
+    all_sorted.sort_by_key(|cfg| format_priority(cfg.sample_format()));
+    let best = all_sorted[0];
+    let fallback = best.with_max_sample_rate().config();
+    let fmt = best.sample_format();
     warn!(
         rate = fallback.sample_rate.0,
         channels = fallback.channels,
+        format = ?fmt,
         "No native 16kHz support, will resample in software"
     );
     Ok((fallback, fmt))

@@ -36,7 +36,7 @@ fn default_injection_threshold() -> usize {
 }
 
 fn default_timeout_secs() -> u64 {
-    3
+    10
 }
 
 impl Config {

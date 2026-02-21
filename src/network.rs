@@ -18,7 +18,7 @@ use crate::config::Config;
 ///
 /// - `config`: App config with API key and model.
 /// - `audio_rx`: Receives PCM i16 audio chunks from the capture thread.
-/// - `stop_rx`: Receives a signal when recording stops (CTRL+T released).
+/// - `stop_rx`: Receives a signal when recording stops (hotkey released).
 ///
 /// Returns the accumulated transcription text.
 pub async fn transcribe(
@@ -46,8 +46,8 @@ pub async fn transcribe(
 
     info!("Setup message sent, waiting for confirmation...");
 
-    // Wait for setup confirmation from server
-    match timeout(Duration::from_secs(5), stream.next()).await {
+    // Wait for setup confirmation from server (MUST complete before we process stop)
+    match timeout(Duration::from_secs(10), stream.next()).await {
         Ok(Some(Ok(msg))) => {
             debug!(msg = %msg, "Setup response received");
         }
@@ -58,37 +58,47 @@ pub async fn transcribe(
             bail!("WebSocket closed before setup confirmation");
         }
         Err(_) => {
-            bail!("Timeout waiting for setup confirmation (5s)");
+            bail!("Timeout waiting for setup confirmation (10s)");
         }
     }
 
-    // Step 2: Stream audio chunks until stop signal
-    let mut recording = true;
+    info!("Setup confirmed, streaming audio...");
 
-    while recording {
-        tokio::select! {
-            // Check for stop signal
-            _ = stop_rx.recv() => {
-                info!("Stop signal received, finishing audio stream");
-                recording = false;
-            }
-            // Send audio chunks as they arrive
-            chunk = audio_rx.recv() => {
-                match chunk {
-                    Some(pcm_data) => {
-                        let msg = encode_audio_chunk(&pcm_data);
-                        if let Err(e) = sink.send(Message::Text(msg.to_string())).await {
-                            error!(%e, "Failed to send audio chunk");
-                            bail!("WebSocket send error: {}", e);
+    // Step 2: Stream audio chunks until stop signal
+    // Drain any pending stop signal that arrived during setup
+    let already_stopped = stop_rx.try_recv().is_ok();
+    let mut chunks_sent: u64 = 0;
+
+    if !already_stopped {
+        let mut recording = true;
+        while recording {
+            tokio::select! {
+                // Check for stop signal
+                _ = stop_rx.recv() => {
+                    info!(chunks_sent, "Stop signal received, finishing audio stream");
+                    recording = false;
+                }
+                // Send audio chunks as they arrive
+                chunk = audio_rx.recv() => {
+                    match chunk {
+                        Some(pcm_data) => {
+                            let msg = encode_audio_chunk(&pcm_data);
+                            if let Err(e) = sink.send(Message::Text(msg.to_string())).await {
+                                error!(%e, "Failed to send audio chunk");
+                                bail!("WebSocket send error: {}", e);
+                            }
+                            chunks_sent += 1;
                         }
-                    }
-                    None => {
-                        debug!("Audio channel closed");
-                        recording = false;
+                        None => {
+                            debug!("Audio channel closed");
+                            recording = false;
+                        }
                     }
                 }
             }
         }
+    } else {
+        info!("Stop arrived during setup, draining buffered audio...");
     }
 
     // Drain any remaining chunks in the channel
@@ -98,6 +108,18 @@ pub async fn transcribe(
             warn!(%e, "Failed to send trailing audio chunk");
             break;
         }
+        chunks_sent += 1;
+    }
+
+    // If no audio was captured at all, send a brief silence chunk so the API
+    // has something to process (avoids protocol errors on empty sessions)
+    if chunks_sent == 0 {
+        warn!("No audio chunks captured, sending silence");
+        let silence = vec![0i16; 1600]; // 100ms of silence
+        let msg = encode_audio_chunk(&silence);
+        sink.send(Message::Text(msg.to_string()))
+            .await
+            .context("Failed to send silence chunk")?;
     }
 
     // Step 3: Send turnComplete signal
@@ -110,7 +132,7 @@ pub async fn transcribe(
         .await
         .context("Failed to send turnComplete")?;
 
-    info!("turnComplete sent, awaiting transcription...");
+    info!(chunks_sent, "turnComplete sent, awaiting transcription...");
 
     // Step 4: Accumulate text response until server sends turnComplete
     let mut transcription = String::new();

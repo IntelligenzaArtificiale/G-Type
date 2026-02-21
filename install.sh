@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # install.sh — One-line installer for G-Type on Linux/macOS.
-# Usage: curl -sSf https://raw.githubusercontent.com/IntelligenzaArtificiale/g-type/main/install.sh | bash
+# Usage: curl -sSf https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.sh | bash
 set -euo pipefail
 
-REPO="IntelligenzaArtificiale/g-type"
+REPO="IntelligenzaArtificiale/G-Type"
 BIN_NAME="g-type"
 INSTALL_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${HOME}/.config/g-type"
@@ -174,7 +174,7 @@ main() {
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}  Installation complete!${NC}"
     echo -e "${GREEN}  Run '${BIN_NAME}' to start the daemon.${NC}"
-    echo -e "${GREEN}  Hold CTRL+T to dictate anywhere.${NC}"
+    echo -e "${GREEN}  Hold your hotkey (default: CTRL+SHIFT+SPACE) to dictate.${NC}"
     echo -e "${GREEN}${NC}"
     echo -e "${GREEN}  Useful commands:${NC}"
     echo -e "${GREEN}    g-type setup     Re-run setup wizard${NC}"
