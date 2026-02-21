@@ -9,7 +9,12 @@ permissions:
   contents: write
 
 jobs:
+  # Run quality checks before building release artifacts.
+  quality:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: quality
     strategy:
       matrix:
         include:

@@ -2,11 +2,14 @@
 // Interactive setup wizard for first-run. No manual file editing required.
 
 use anyhow::{Context, Result};
-use dialoguer::{Input, Select, theme::ColorfulTheme};
+use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Input, Select};
 use directories::ProjectDirs;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{debug, info};
 
 /// Application configuration persisted to disk.
@@ -35,13 +38,13 @@ fn default_timeout_secs() -> u64 {
 
 impl Config {
     /// Build the REST API URL for Gemini generateContent endpoint.
+    /// The API key is NOT included in the URL — it is sent via the
+    /// `x-goog-api-key` HTTP header (see `network::transcribe`).
     pub fn api_url(&self) -> String {
-        // Model format in config: "models/gemini-2.0-flash"
-        // API URL format: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=KEY
         let model_name = self.model.strip_prefix("models/").unwrap_or(&self.model);
         format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            model_name, self.api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            model_name
         )
     }
 }
@@ -99,51 +102,86 @@ pub fn load() -> Result<Config> {
 /// Run the interactive first-time setup. Prompts for API key in the terminal.
 /// Called automatically on first run, or explicitly via `g-type setup`.
 pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
-    println!("\x1b[36m╔══════════════════════════════════════════════╗\x1b[0m");
-    println!("\x1b[36m║         G-Type — First Time Setup            ║\x1b[0m");
-    println!("\x1b[36m╚══════════════════════════════════════════════╝\x1b[0m");
+    println!();
+    println!(
+        "{}",
+        "╔══════════════════════════════════════════════╗"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "║         G-Type — First Time Setup            ║"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "╚══════════════════════════════════════════════╝"
+            .cyan()
+            .bold()
+    );
     println!();
     println!("  G-Type needs a Google Gemini API key to work.");
-    println!("  Get one free at: \x1b[4mhttps://aistudio.google.com/apikey\x1b[0m");
+    println!(
+        "  Get one free at: {}",
+        "https://aistudio.google.com/apikey".underline()
+    );
     println!();
 
     let theme = ColorfulTheme::default();
 
-    // API Key
+    // ── Step 1: API Key ────────────────────────────────────
     let api_key: String = Input::with_theme(&theme)
-        .with_prompt("Gemini API Key")
+        .with_prompt("🔑 Gemini API Key")
         .validate_with(|input: &String| -> Result<(), &str> {
             if input.trim().is_empty() {
                 Err("API Key cannot be empty")
             } else if !input.starts_with("AIzaSy") {
-                Err("Invalid API Key format. Gemini keys usually start with 'AIzaSy'")
+                Err("Invalid format — Gemini keys start with 'AIzaSy'")
+            } else if input.len() < 30 {
+                Err("API Key seems too short")
             } else {
                 Ok(())
             }
         })
         .interact_text()?;
 
-    // Model Selection
+    // ── Step 2: Verify API key with a real call ────────────
+    verify_api_key_spinner(&api_key)?;
+
+    // ── Step 3: Model Selection ────────────────────────────
     let models = vec![
         "models/gemini-2.0-flash",
         "models/gemini-2.0-flash-lite",
-        "models/gemini-2.0-pro-exp",
+        "models/gemini-2.5-flash",
+        "models/gemini-2.5-pro",
         "models/gemini-1.5-pro",
         "models/gemini-1.5-flash",
     ];
-    
+
     let model_idx = Select::with_theme(&theme)
-        .with_prompt("Select Gemini Model")
+        .with_prompt("🤖 Select Gemini Model")
         .default(0)
         .items(&models)
         .interact()?;
     let model = models[model_idx].to_string();
 
-    // Hotkey
-    let hotkey: String = Input::with_theme(&theme)
-        .with_prompt("Hotkey")
-        .default(default_hotkey())
-        .interact_text()?;
+    // ── Step 4: Hotkey — interactive capture ───────────────
+    println!();
+    println!(
+        "  {} Press your desired hotkey combo (e.g. hold Ctrl+Shift+Space)...",
+        "⌨️".bold()
+    );
+    println!(
+        "  {}",
+        "(or press Enter to use the default: ctrl+shift+space)".dimmed()
+    );
+
+    let hotkey = capture_hotkey_interactive().unwrap_or_else(|| {
+        println!("  Using default hotkey: {}", "ctrl+shift+space".green());
+        default_hotkey()
+    });
 
     let cfg = Config {
         api_key,
@@ -155,11 +193,235 @@ pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
     save(&cfg, path)?;
 
     println!();
-    println!("  \x1b[32m✔ Config saved to {}\x1b[0m", path.display());
-    println!("  \x1b[32m✔ You can re-run setup anytime with: g-type setup\x1b[0m");
+    println!(
+        "  {} Config saved to {}",
+        "✔".green().bold(),
+        path.display()
+    );
+    println!(
+        "  {} Re-run anytime with: {}",
+        "✔".green().bold(),
+        "g-type setup".bold()
+    );
     println!();
 
     Ok(cfg)
+}
+
+/// Verify the API key by making a lightweight test call to the Gemini models.list endpoint.
+/// Shows a spinner while the request is in flight.
+fn verify_api_key_spinner(api_key: &str) -> Result<()> {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .expect("invalid spinner template"),
+    );
+    spinner.set_message("Verifying API key...");
+    spinner.enable_steady_tick(Duration::from_millis(80));
+
+    let result = verify_api_key_sync(api_key);
+
+    match &result {
+        Ok(()) => {
+            spinner.finish_with_message(format!("{}", "✔ API key is valid!".green().bold()));
+        }
+        Err(e) => {
+            spinner.finish_with_message(format!("{} {}", "✘".red().bold(), e));
+        }
+    }
+
+    result
+}
+
+/// Synchronous API key verification — calls Gemini models.list endpoint.
+fn verify_api_key_sync(api_key: &str) -> Result<()> {
+    let url = "https://generativelanguage.googleapis.com/v1beta/models";
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("Failed to build HTTP client for verification")?;
+
+    let response = client
+        .get(url)
+        .header("x-goog-api-key", api_key)
+        .send()
+        .context("Network error — check your internet connection")?;
+
+    let status = response.status();
+    if status.is_success() {
+        Ok(())
+    } else if status.as_u16() == 400 || status.as_u16() == 403 {
+        anyhow::bail!("API key is invalid or has insufficient permissions (HTTP {}). Double-check it at https://aistudio.google.com/apikey", status)
+    } else {
+        anyhow::bail!(
+            "Unexpected response from Gemini API (HTTP {}). Try again later.",
+            status
+        )
+    }
+}
+
+/// Attempt to interactively capture a hotkey combo by listening to keyboard events.
+/// Returns None if capture fails or times out (e.g. no display, CI environment).
+fn capture_hotkey_interactive() -> Option<String> {
+    use std::sync::{Arc, Mutex};
+
+    let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let modifiers: Arc<Mutex<std::collections::HashSet<String>>> =
+        Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let captured_clone = captured.clone();
+    let modifiers_clone = modifiers.clone();
+    let done_clone = done.clone();
+
+    // Spawn rdev listener on a separate thread
+    let listener_handle = std::thread::spawn(move || {
+        let _ = rdev::listen(move |event: rdev::Event| {
+            if done_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            match event.event_type {
+                rdev::EventType::KeyPress(key) => {
+                    let mut mods = modifiers_clone.lock().unwrap();
+
+                    // Track modifiers
+                    match key {
+                        rdev::Key::ControlLeft | rdev::Key::ControlRight => {
+                            mods.insert("ctrl".to_string());
+                        }
+                        rdev::Key::ShiftLeft | rdev::Key::ShiftRight => {
+                            mods.insert("shift".to_string());
+                        }
+                        rdev::Key::Alt | rdev::Key::AltGr => {
+                            mods.insert("alt".to_string());
+                        }
+                        rdev::Key::MetaLeft | rdev::Key::MetaRight => {
+                            mods.insert("super".to_string());
+                        }
+                        rdev::Key::Return => {
+                            // Enter = accept default, signal done
+                            done_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        _ => {
+                            // Non-modifier key pressed — this is the trigger
+                            if !mods.is_empty() {
+                                let trigger = rdev_key_to_str(key);
+                                // Build combo string: sort modifiers for consistency
+                                let mut parts: Vec<String> = mods.iter().cloned().collect();
+                                parts.sort();
+                                parts.push(trigger);
+                                let combo = parts.join("+");
+
+                                *captured_clone.lock().unwrap() = Some(combo);
+                                done_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+                rdev::EventType::KeyRelease(key) => {
+                    let mut mods = modifiers_clone.lock().unwrap();
+                    match key {
+                        rdev::Key::ControlLeft | rdev::Key::ControlRight => {
+                            mods.remove("ctrl");
+                        }
+                        rdev::Key::ShiftLeft | rdev::Key::ShiftRight => {
+                            mods.remove("shift");
+                        }
+                        rdev::Key::Alt | rdev::Key::AltGr => {
+                            mods.remove("alt");
+                        }
+                        rdev::Key::MetaLeft | rdev::Key::MetaRight => {
+                            mods.remove("super");
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        });
+    });
+
+    // Wait up to 10 seconds for the user to press a combo
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if done.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Signal done to stop the listener (it will exit when the thread drops)
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    drop(listener_handle); // detach — rdev::listen can't be cleanly stopped
+
+    let result = captured.lock().unwrap().clone();
+    if let Some(ref combo) = result {
+        println!("  Captured hotkey: {}", combo.green().bold());
+    }
+    result
+}
+
+/// Convert an rdev::Key to a lowercase string for hotkey config.
+fn rdev_key_to_str(key: rdev::Key) -> String {
+    match key {
+        rdev::Key::Space => "space".to_string(),
+        rdev::Key::Return => "enter".to_string(),
+        rdev::Key::Tab => "tab".to_string(),
+        rdev::Key::Escape => "escape".to_string(),
+        rdev::Key::Backspace => "backspace".to_string(),
+        rdev::Key::Delete => "delete".to_string(),
+        rdev::Key::F1 => "f1".to_string(),
+        rdev::Key::F2 => "f2".to_string(),
+        rdev::Key::F3 => "f3".to_string(),
+        rdev::Key::F4 => "f4".to_string(),
+        rdev::Key::F5 => "f5".to_string(),
+        rdev::Key::F6 => "f6".to_string(),
+        rdev::Key::F7 => "f7".to_string(),
+        rdev::Key::F8 => "f8".to_string(),
+        rdev::Key::F9 => "f9".to_string(),
+        rdev::Key::F10 => "f10".to_string(),
+        rdev::Key::F11 => "f11".to_string(),
+        rdev::Key::F12 => "f12".to_string(),
+        rdev::Key::KeyA => "a".to_string(),
+        rdev::Key::KeyB => "b".to_string(),
+        rdev::Key::KeyC => "c".to_string(),
+        rdev::Key::KeyD => "d".to_string(),
+        rdev::Key::KeyE => "e".to_string(),
+        rdev::Key::KeyF => "f".to_string(),
+        rdev::Key::KeyG => "g".to_string(),
+        rdev::Key::KeyH => "h".to_string(),
+        rdev::Key::KeyI => "i".to_string(),
+        rdev::Key::KeyJ => "j".to_string(),
+        rdev::Key::KeyK => "k".to_string(),
+        rdev::Key::KeyL => "l".to_string(),
+        rdev::Key::KeyM => "m".to_string(),
+        rdev::Key::KeyN => "n".to_string(),
+        rdev::Key::KeyO => "o".to_string(),
+        rdev::Key::KeyP => "p".to_string(),
+        rdev::Key::KeyQ => "q".to_string(),
+        rdev::Key::KeyR => "r".to_string(),
+        rdev::Key::KeyS => "s".to_string(),
+        rdev::Key::KeyT => "t".to_string(),
+        rdev::Key::KeyU => "u".to_string(),
+        rdev::Key::KeyV => "v".to_string(),
+        rdev::Key::KeyW => "w".to_string(),
+        rdev::Key::KeyX => "x".to_string(),
+        rdev::Key::KeyY => "y".to_string(),
+        rdev::Key::KeyZ => "z".to_string(),
+        rdev::Key::Num0 => "0".to_string(),
+        rdev::Key::Num1 => "1".to_string(),
+        rdev::Key::Num2 => "2".to_string(),
+        rdev::Key::Num3 => "3".to_string(),
+        rdev::Key::Num4 => "4".to_string(),
+        rdev::Key::Num5 => "5".to_string(),
+        rdev::Key::Num6 => "6".to_string(),
+        rdev::Key::Num7 => "7".to_string(),
+        rdev::Key::Num8 => "8".to_string(),
+        rdev::Key::Num9 => "9".to_string(),
+        other => format!("{:?}", other).to_lowercase(),
+    }
 }
 
 // ── Save / Update ──────────────────────────────────────────
@@ -171,8 +433,7 @@ fn save(cfg: &Config, path: &PathBuf) -> Result<()> {
             .with_context(|| format!("Cannot create config directory {}", parent.display()))?;
     }
 
-    let content = toml::to_string_pretty(cfg)
-        .context("Failed to serialize config")?;
+    let content = toml::to_string_pretty(cfg).context("Failed to serialize config")?;
 
     fs::write(path, &content)
         .with_context(|| format!("Failed to write config to {}", path.display()))?;
@@ -200,7 +461,7 @@ pub fn set_api_key(key: &str) -> Result<()> {
 
     cfg.api_key = key.to_string();
     save(&cfg, &path)?;
-    println!("  \x1b[32m✔ API key updated.\x1b[0m");
+    println!("  {} API key updated.", "✔".green().bold());
     Ok(())
 }
 
@@ -217,7 +478,8 @@ mod tests {
             timeout_secs: 3,
         };
         let url = cfg.api_url();
-        assert!(url.contains("test-key-123"));
+        // API key must NOT appear in the URL (sent via header).
+        assert!(!url.contains("test-key-123"), "API key must not be in URL");
         assert!(url.contains("gemini-2.0-flash"));
         assert!(url.contains("generateContent"));
         assert!(url.starts_with("https://"));
@@ -229,5 +491,56 @@ mod tests {
         let cfg: Config = toml::from_str(raw).unwrap();
         assert_eq!(cfg.model, "models/gemini-2.0-flash");
         assert_eq!(cfg.hotkey, "ctrl+shift+space");
+        assert_eq!(cfg.timeout_secs, 10);
+    }
+
+    #[test]
+    fn test_full_config_roundtrip() {
+        let raw = r#"
+api_key = "AIzaSyTest"
+model = "models/gemini-1.5-pro"
+hotkey = "alt+f9"
+timeout_secs = 30
+"#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        assert_eq!(cfg.api_key, "AIzaSyTest");
+        assert_eq!(cfg.model, "models/gemini-1.5-pro");
+        assert_eq!(cfg.hotkey, "alt+f9");
+        assert_eq!(cfg.timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_api_url_no_key_leak() {
+        let cfg = Config {
+            api_key: "AIzaSySECRET".into(),
+            model: "models/gemini-2.0-flash".into(),
+            hotkey: default_hotkey(),
+            timeout_secs: 10,
+        };
+        let url = cfg.api_url();
+        assert!(!url.contains("SECRET"), "API key must not appear in URL");
+        assert!(!url.contains("key="), "No key= querystring allowed");
+    }
+
+    #[test]
+    fn test_api_url_strips_model_prefix() {
+        let cfg = Config {
+            api_key: "k".into(),
+            model: "models/gemini-1.5-flash".into(),
+            hotkey: default_hotkey(),
+            timeout_secs: 10,
+        };
+        assert!(cfg.api_url().contains("gemini-1.5-flash:generateContent"));
+    }
+
+    #[test]
+    fn test_api_url_without_prefix() {
+        let cfg = Config {
+            api_key: "k".into(),
+            model: "gemini-2.0-pro".into(),
+            hotkey: default_hotkey(),
+            timeout_secs: 10,
+        };
+        assert!(cfg.api_url().contains("gemini-2.0-pro:generateContent"));
     }
 }

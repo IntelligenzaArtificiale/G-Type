@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use arboard::Clipboard;
-use enigo::{Enigo, Keyboard, Settings, Key, Direction};
+use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, warn};
@@ -29,7 +29,10 @@ pub fn inject(text: &str) -> Result<()> {
     }
 
     if text.len() > LONG_TEXT_THRESHOLD {
-        debug!(len = text.len(), "Text is very long, using clipboard injection directly");
+        debug!(
+            len = text.len(),
+            "Text is very long, using clipboard injection directly"
+        );
         return inject_clipboard(text);
     }
 
@@ -50,11 +53,20 @@ fn inject_keystrokes(text: &str) -> Result<()> {
     // Small delay before starting to let the OS settle after hotkey release
     thread::sleep(Duration::from_millis(80));
 
-    for ch in text.chars() {
+    let total = text.chars().count();
+    let log_every = if total > 200 { total / 10 } else { usize::MAX };
+
+    for (i, ch) in text.chars().enumerate() {
         if let Err(e) = enigo.text(&ch.to_string()) {
             anyhow::bail!("Failed to type character '{}': {:?}", ch, e);
         }
         thread::sleep(Duration::from_millis(KEYSTROKE_DELAY_MS));
+
+        // Log progress every ~10% for long texts
+        if log_every != usize::MAX && (i + 1) % log_every == 0 {
+            let pct = ((i + 1) as f64 / total as f64 * 100.0) as u32;
+            debug!(progress = %format!("{}%", pct), chars = i + 1, total, "Injecting text...");
+        }
     }
 
     debug!(len = text.len(), "Keystroke injection complete");
@@ -65,8 +77,7 @@ fn inject_keystrokes(text: &str) -> Result<()> {
 fn inject_clipboard(text: &str) -> Result<()> {
     debug!(len = text.len(), "Using clipboard injection");
 
-    let mut clipboard = Clipboard::new()
-        .context("Failed to access system clipboard")?;
+    let mut clipboard = Clipboard::new().context("Failed to access system clipboard")?;
 
     // Step 1: Backup current clipboard contents
     let backup = clipboard.get_text().ok();
@@ -157,5 +168,11 @@ mod tests {
     fn test_empty_text() {
         let result = inject("");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_long_text_threshold() {
+        // Verify the constant is sane
+        assert_eq!(LONG_TEXT_THRESHOLD, 500);
     }
 }

@@ -50,8 +50,7 @@ pub async fn run(config: Config) -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
 
     // Parse the configured hotkey
-    let hotkey = input::parse_hotkey(&config.hotkey)
-        .context("Invalid hotkey in config")?;
+    let hotkey = input::parse_hotkey(&config.hotkey).context("Invalid hotkey in config")?;
     let hotkey_label = hotkey.label.clone();
 
     // Channel for keyboard input signals (Start/Stop)
@@ -62,11 +61,40 @@ pub async fn run(config: Config) -> Result<()> {
     let _input_handle = crate::input::spawn_listener(input_tx, shutdown_clone, hotkey)
         .context("Failed to spawn keyboard listener")?;
 
+    // Register SIGINT/SIGTERM handler for graceful shutdown
+    let shutdown_sig = shutdown.clone();
+    tokio::spawn(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).ok();
+            tokio::select! {
+                _ = ctrl_c => {},
+                _ = async {
+                    if let Some(ref mut s) = sigterm { s.recv().await; }
+                    else { std::future::pending::<()>().await; }
+                } => {},
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = ctrl_c.await;
+        }
+        info!("Shutdown signal received, cleaning up...");
+        shutdown_sig.store(true, Ordering::SeqCst);
+    });
+
     info!(hotkey = %hotkey_label, "Ready — hold hotkey to dictate.");
 
     let mut state = State::Idle;
 
     loop {
+        if shutdown.load(Ordering::SeqCst) {
+            info!("Shutting down gracefully.");
+            return Ok(());
+        }
+
         match state {
             State::Idle => {
                 state = state_idle(&mut input_rx, &hotkey_label).await;
@@ -180,7 +208,10 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
     };
 
     let duration = all_samples.len() as f64 / 16_000.0;
-    info!(duration = format!("{:.1}s", duration), "⏹ Stopped. Transcribing...");
+    info!(
+        duration = format!("{:.1}s", duration),
+        "⏹ Stopped. Transcribing..."
+    );
     crate::audio_feedback::play_stop_beep();
 
     if all_samples.is_empty() {
@@ -207,10 +238,7 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
 
     // Run injection on a blocking thread to avoid blocking the async runtime
     let text = transcription.clone();
-    let inject_result = tokio::task::spawn_blocking(move || {
-        injector::inject(&text)
-    })
-    .await;
+    let inject_result = tokio::task::spawn_blocking(move || injector::inject(&text)).await;
 
     match inject_result {
         Ok(Ok(())) => {

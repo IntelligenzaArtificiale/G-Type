@@ -1,4 +1,4 @@
-use rodio::{OutputStream, Sink, source::SineWave, Source};
+use rodio::{source::SineWave, OutputStream, Sink, Source};
 use std::time::Duration;
 use tracing::debug;
 
@@ -23,7 +23,7 @@ pub fn play_error_beep() {
                 let source2 = SineWave::new(250.0)
                     .take_duration(Duration::from_millis(200))
                     .amplify(0.20);
-                
+
                 sink.append(source1);
                 sink.append(source2);
                 sink.sleep_until_end();
@@ -38,9 +38,7 @@ fn play_beep(freq: f32, duration: Duration) {
             Ok((_stream, stream_handle)) => {
                 match Sink::try_new(&stream_handle) {
                     Ok(sink) => {
-                        let source = SineWave::new(freq)
-                            .take_duration(duration)
-                            .amplify(0.20); // 20% volume to not be too loud
+                        let source = SineWave::new(freq).take_duration(duration).amplify(0.20); // 20% volume to not be too loud
                         sink.append(source);
                         sink.sleep_until_end();
                     }

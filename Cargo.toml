@@ -1,6 +1,6 @@
 [package]
 name = "g-type"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 description = "Global walkie-talkie dictation daemon powered by Gemini REST API"
 license = "MIT"
@@ -16,7 +16,7 @@ path = "src/main.rs"
 tokio = { version = "1", features = ["full"] }
 
 # HTTP client for Gemini REST API
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
 
 # Audio capture
 cpal = "0.15"
@@ -52,6 +52,8 @@ rodio = "0.20.1"
 reqwest-retry = "0.8"
 reqwest-middleware = { version = "0.4", features = ["json"] }
 dialoguer = "0.12.0"
+indicatif = "0.17"
+colored = "2"
 
 [profile.release]
 opt-level = 3

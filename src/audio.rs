@@ -2,7 +2,7 @@
 // Uses std::sync::mpsc (not tokio) for the audio callback thread → collector bridge.
 // This avoids issues with tokio::sync::mpsc::blocking_send on non-tokio threads.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SampleRate, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,7 +28,9 @@ fn suppress_alsa_stderr() -> Option<StderrGuard> {
         }
         Some(StderrGuard { orig_fd })
     } else {
-        unsafe { libc::close(orig_fd); }
+        unsafe {
+            libc::close(orig_fd);
+        }
         None
     }
 }
@@ -86,9 +88,23 @@ fn default_input_device() -> Result<Device> {
     if let Ok(input_devices) = host.input_devices() {
         let devices: Vec<Device> = input_devices.collect();
 
-        let skip_prefixes = ["null", "default", "pipewire", "pulse", "sysdefault",
-            "dsnoop", "plughw", "jack", "oss", "upmix", "vdownmix",
-            "lavrate", "samplerate", "speex", "surround"];
+        let skip_prefixes = [
+            "null",
+            "default",
+            "pipewire",
+            "pulse",
+            "sysdefault",
+            "dsnoop",
+            "plughw",
+            "jack",
+            "oss",
+            "upmix",
+            "vdownmix",
+            "lavrate",
+            "samplerate",
+            "speex",
+            "surround",
+        ];
 
         let mut usb_hw_devices: Vec<&Device> = Vec::new();
         let mut other_hw_devices: Vec<&Device> = Vec::new();
@@ -104,16 +120,18 @@ fn default_input_device() -> Result<Device> {
                     continue;
                 }
                 // Verify it supports input configs
-                let has_configs = device.supported_input_configs()
-                    .map(|c| c.count() > 0).unwrap_or(false);
+                let has_configs = device
+                    .supported_input_configs()
+                    .map(|c| c.count() > 0)
+                    .unwrap_or(false);
                 if !has_configs {
                     continue;
                 }
 
                 // Check if this card is USB
-                let is_usb = usb_card_names.iter().any(|usb_name| {
-                    lower.contains(&format!("card={}", usb_name.to_lowercase()))
-                });
+                let is_usb = usb_card_names
+                    .iter()
+                    .any(|usb_name| lower.contains(&format!("card={}", usb_name.to_lowercase())));
 
                 if is_usb {
                     usb_hw_devices.push(device);
@@ -128,7 +146,10 @@ fn default_input_device() -> Result<Device> {
 
         if let Some(device) = best {
             let name = device.name().unwrap_or_else(|_| "unknown".into());
-            let is_usb = usb_hw_devices.first().map(|d| std::ptr::eq(*d, *device)).unwrap_or(false);
+            let is_usb = usb_hw_devices
+                .first()
+                .map(|d| std::ptr::eq(*d, *device))
+                .unwrap_or(false);
             debug!(
                 device = name,
                 usb = is_usb,
@@ -139,7 +160,8 @@ fn default_input_device() -> Result<Device> {
     }
 
     // Fallback to the default
-    let device = host.default_input_device()
+    let device = host
+        .default_input_device()
         .context("No audio input device found. Is a microphone connected?")?;
     debug!(
         device = device.name().unwrap_or_else(|_| "unknown".into()),
@@ -205,8 +227,8 @@ fn pick_input_config(device: &Device) -> Result<(StreamConfig, SampleFormat)> {
             SampleFormat::I16 => 0,
             SampleFormat::F32 => 1,
             SampleFormat::I32 => 2,
-            SampleFormat::U8  => 3,
-            _                 => 4,
+            SampleFormat::U8 => 3,
+            _ => 4,
         }
     };
 
@@ -214,7 +236,8 @@ fn pick_input_config(device: &Device) -> Result<(StreamConfig, SampleFormat)> {
     all_sorted.sort_by_key(|cfg| format_priority(cfg.sample_format()));
     let best = all_sorted[0];
     // Prefer a rate the device natively supports
-    let rate = if best.min_sample_rate().0 <= TARGET_RATE && best.max_sample_rate().0 >= TARGET_RATE {
+    let rate = if best.min_sample_rate().0 <= TARGET_RATE && best.max_sample_rate().0 >= TARGET_RATE
+    {
         SampleRate(TARGET_RATE)
     } else {
         best.max_sample_rate()
@@ -281,10 +304,8 @@ impl Downsampler {
                 let frac = self.resample_pos - idx as f64;
 
                 // Mono-mix frame at `idx`
-                let s0: f64 = (0..ch)
-                    .map(|c| samples[idx * ch + c] as f64)
-                    .sum::<f64>()
-                    / ch as f64;
+                let s0: f64 =
+                    (0..ch).map(|c| samples[idx * ch + c] as f64).sum::<f64>() / ch as f64;
 
                 let sample = if idx + 1 < frames {
                     // Mono-mix frame at `idx+1` for interpolation
@@ -366,10 +387,7 @@ pub fn audio_channel() -> (AudioTx, AudioRx) {
 /// Start audio capture on a dedicated OS thread.
 /// Returns immediately. Audio chunks flow through `tx` (std::sync::mpsc).
 /// Set `running` to false to stop capture.
-pub fn start_capture(
-    tx: AudioTx,
-    running: Arc<AtomicBool>,
-) -> Result<()> {
+pub fn start_capture(tx: AudioTx, running: Arc<AtomicBool>) -> Result<()> {
     let device = default_input_device()?;
     let (config, sample_format) = pick_input_config(&device)?;
 
@@ -396,9 +414,10 @@ pub fn start_capture(
     let s_err = send_errors.clone();
 
     std::thread::spawn(move || {
-        let downsampler = Arc::new(std::sync::Mutex::new(
-            Downsampler::new(source_rate, source_channels),
-        ));
+        let downsampler = Arc::new(std::sync::Mutex::new(Downsampler::new(
+            source_rate,
+            source_channels,
+        )));
 
         let err_callback = |err: cpal::StreamError| {
             error!(%err, "Audio stream error");
@@ -407,12 +426,12 @@ pub fn start_capture(
         // Generic helper: process raw i16 samples through downsampler and send chunks.
         // We define closures per format that convert to i16 then call this shared logic.
         let build_i16_callback = |ds: Arc<std::sync::Mutex<Downsampler>>,
-                                   tx: AudioTx,
-                                   running: Arc<AtomicBool>,
-                                   cb_count: Arc<AtomicU64>,
-                                   s_fed: Arc<AtomicU64>,
-                                   c_sent: Arc<AtomicU64>,
-                                   s_err: Arc<AtomicU64>| {
+                                  tx: AudioTx,
+                                  running: Arc<AtomicBool>,
+                                  cb_count: Arc<AtomicU64>,
+                                  s_fed: Arc<AtomicU64>,
+                                  c_sent: Arc<AtomicU64>,
+                                  s_err: Arc<AtomicU64>| {
             move |data: &[i16]| {
                 if !running.load(Ordering::Relaxed) {
                     return;
@@ -436,25 +455,33 @@ pub fn start_capture(
         };
 
         let i16_cb = build_i16_callback(
-            downsampler.clone(), tx.clone(), running.clone(),
-            cb_count.clone(), s_fed.clone(), c_sent.clone(), s_err.clone(),
+            downsampler.clone(),
+            tx.clone(),
+            running.clone(),
+            cb_count.clone(),
+            s_fed.clone(),
+            c_sent.clone(),
+            s_err.clone(),
         );
 
         let stream_result = match sample_format {
-            SampleFormat::I16 => {
-                device.build_input_stream(
-                    &config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        i16_cb(data);
-                    },
-                    err_callback,
-                    None,
-                )
-            }
+            SampleFormat::I16 => device.build_input_stream(
+                &config,
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    i16_cb(data);
+                },
+                err_callback,
+                None,
+            ),
             SampleFormat::F32 => {
                 let f32_cb = build_i16_callback(
-                    downsampler.clone(), tx.clone(), running.clone(),
-                    cb_count.clone(), s_fed.clone(), c_sent.clone(), s_err.clone(),
+                    downsampler.clone(),
+                    tx.clone(),
+                    running.clone(),
+                    cb_count.clone(),
+                    s_fed.clone(),
+                    c_sent.clone(),
+                    s_err.clone(),
                 );
                 device.build_input_stream(
                     &config,
@@ -468,8 +495,13 @@ pub fn start_capture(
             }
             SampleFormat::U8 => {
                 let u8_cb = build_i16_callback(
-                    downsampler.clone(), tx.clone(), running.clone(),
-                    cb_count.clone(), s_fed.clone(), c_sent.clone(), s_err.clone(),
+                    downsampler.clone(),
+                    tx.clone(),
+                    running.clone(),
+                    cb_count.clone(),
+                    s_fed.clone(),
+                    c_sent.clone(),
+                    s_err.clone(),
                 );
                 device.build_input_stream(
                     &config,
@@ -483,8 +515,13 @@ pub fn start_capture(
             }
             SampleFormat::I32 => {
                 let i32_cb = build_i16_callback(
-                    downsampler.clone(), tx.clone(), running.clone(),
-                    cb_count.clone(), s_fed.clone(), c_sent.clone(), s_err.clone(),
+                    downsampler.clone(),
+                    tx.clone(),
+                    running.clone(),
+                    cb_count.clone(),
+                    s_fed.clone(),
+                    c_sent.clone(),
+                    s_err.clone(),
                 );
                 device.build_input_stream(
                     &config,
@@ -515,7 +552,8 @@ pub fn start_capture(
                 while running.load(Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     tick += 1;
-                    if tick % 10 == 0 { // every ~1 second
+                    if tick.is_multiple_of(10) {
+                        // every ~1 second
                         debug!(
                             callbacks = callback_count.load(Ordering::Relaxed),
                             samples_fed = samples_fed.load(Ordering::Relaxed),
@@ -548,12 +586,14 @@ pub fn start_capture(
 pub fn list_input_devices() -> Result<Vec<(String, Vec<String>)>> {
     let _stderr_guard = suppress_alsa_stderr();
     let host = cpal::default_host();
-    let default_name = host.default_input_device()
+    let default_name = host
+        .default_input_device()
         .and_then(|d| d.name().ok())
         .unwrap_or_default();
 
     let mut devices = Vec::new();
-    let input_devices = host.input_devices()
+    let input_devices = host
+        .input_devices()
         .context("Failed to enumerate audio input devices")?;
 
     for device in input_devices {
@@ -594,7 +634,10 @@ pub fn test_audio_capture(duration_secs: u32) -> Result<(u64, u64, f64)> {
     let device_name = device.name().unwrap_or_else(|_| "unknown".into());
 
     eprintln!("  Device: {}", device_name);
-    eprintln!("  Config: {}Hz, {} channels, {:?}", source_rate, source_channels, sample_format);
+    eprintln!(
+        "  Config: {}Hz, {} channels, {:?}",
+        source_rate, source_channels, sample_format
+    );
     eprintln!("  Recording for {} seconds...", duration_secs);
 
     let callback_count = Arc::new(AtomicU64::new(0));
@@ -613,24 +656,28 @@ pub fn test_audio_capture(duration_secs: u32) -> Result<(u64, u64, f64)> {
 
     // Generic callback that processes i16 samples
     let process_i16 = move |data: &[i16]| {
-        if !r.load(Ordering::Relaxed) { return; }
+        if !r.load(Ordering::Relaxed) {
+            return;
+        }
         cc.fetch_add(1, Ordering::Relaxed);
         ts.fetch_add(data.len() as u64, Ordering::Relaxed);
-        let max = data.iter().map(|s| s.unsigned_abs() as u64).max().unwrap_or(0);
+        let max = data
+            .iter()
+            .map(|s| s.unsigned_abs() as u64)
+            .max()
+            .unwrap_or(0);
         pa.fetch_max(max, Ordering::Relaxed);
     };
 
     let stream = match sample_format {
-        SampleFormat::I16 => {
-            device.build_input_stream(
-                &config,
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    process_i16(data);
-                },
-                err_callback,
-                None,
-            )?
-        }
+        SampleFormat::I16 => device.build_input_stream(
+            &config,
+            move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                process_i16(data);
+            },
+            err_callback,
+            None,
+        )?,
         SampleFormat::F32 => {
             let cc2 = callback_count.clone();
             let ts2 = total_samples.clone();
@@ -639,10 +686,16 @@ pub fn test_audio_capture(duration_secs: u32) -> Result<(u64, u64, f64)> {
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if !r2.load(Ordering::Relaxed) { return; }
+                    if !r2.load(Ordering::Relaxed) {
+                        return;
+                    }
                     cc2.fetch_add(1, Ordering::Relaxed);
                     ts2.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    let max = data.iter().map(|s| (s.abs() * i16::MAX as f32) as u64).max().unwrap_or(0);
+                    let max = data
+                        .iter()
+                        .map(|s| (s.abs() * i16::MAX as f32) as u64)
+                        .max()
+                        .unwrap_or(0);
                     pa2.fetch_max(max, Ordering::Relaxed);
                 },
                 err_callback,
@@ -657,10 +710,16 @@ pub fn test_audio_capture(duration_secs: u32) -> Result<(u64, u64, f64)> {
             device.build_input_stream(
                 &config,
                 move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                    if !r2.load(Ordering::Relaxed) { return; }
+                    if !r2.load(Ordering::Relaxed) {
+                        return;
+                    }
                     cc2.fetch_add(1, Ordering::Relaxed);
                     ts2.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    let max = data.iter().map(|s| (i32_to_i16(*s)).unsigned_abs() as u64).max().unwrap_or(0);
+                    let max = data
+                        .iter()
+                        .map(|s| (i32_to_i16(*s)).unsigned_abs() as u64)
+                        .max()
+                        .unwrap_or(0);
                     pa2.fetch_max(max, Ordering::Relaxed);
                 },
                 err_callback,
@@ -675,10 +734,16 @@ pub fn test_audio_capture(duration_secs: u32) -> Result<(u64, u64, f64)> {
             device.build_input_stream(
                 &config,
                 move |data: &[u8], _: &cpal::InputCallbackInfo| {
-                    if !r2.load(Ordering::Relaxed) { return; }
+                    if !r2.load(Ordering::Relaxed) {
+                        return;
+                    }
                     cc2.fetch_add(1, Ordering::Relaxed);
                     ts2.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    let max = data.iter().map(|s| u8_to_i16(*s).unsigned_abs() as u64).max().unwrap_or(0);
+                    let max = data
+                        .iter()
+                        .map(|s| u8_to_i16(*s).unsigned_abs() as u64)
+                        .max()
+                        .unwrap_or(0);
                     pa2.fetch_max(max, Ordering::Relaxed);
                 },
                 err_callback,
@@ -699,8 +764,14 @@ pub fn test_audio_capture(duration_secs: u32) -> Result<(u64, u64, f64)> {
         let peak_pct = (peak as f64 / i16::MAX as f64 * 100.0).min(100.0);
         let bar_len = (peak_pct / 5.0) as usize;
         let bar: String = "█".repeat(bar_len) + &"░".repeat(20 - bar_len);
-        eprintln!("  [{}s] callbacks={}, samples={}, peak={:.0}% |{}|",
-            i + 1, cbs, samps, peak_pct, bar);
+        eprintln!(
+            "  [{}s] callbacks={}, samples={}, peak={:.0}% |{}|",
+            i + 1,
+            cbs,
+            samps,
+            peak_pct,
+            bar
+        );
         // Reset peak for next second
         peak_amplitude.store(0, Ordering::Relaxed);
     }
@@ -745,9 +816,9 @@ mod tests {
 
     #[test]
     fn test_u8_to_i16() {
-        assert_eq!(u8_to_i16(128), 0);       // silence
-        assert_eq!(u8_to_i16(0), -32768);    // min
-        assert_eq!(u8_to_i16(255), 32512);   // near max
+        assert_eq!(u8_to_i16(128), 0); // silence
+        assert_eq!(u8_to_i16(0), -32768); // min
+        assert_eq!(u8_to_i16(255), 32512); // near max
     }
 
     #[test]
@@ -773,8 +844,16 @@ mod tests {
 
         // 156 callbacks × 283 samples = 44148 samples at 44100Hz
         // At 16kHz output = ~16017 samples → ~10 chunks of 1600
-        assert!(total_chunks >= 9, "Expected >=9 chunks, got {}", total_chunks);
-        assert!(total_chunks <= 11, "Expected <=11 chunks, got {}", total_chunks);
+        assert!(
+            total_chunks >= 9,
+            "Expected >=9 chunks, got {}",
+            total_chunks
+        );
+        assert!(
+            total_chunks <= 11,
+            "Expected <=11 chunks, got {}",
+            total_chunks
+        );
     }
 
     #[test]
@@ -802,6 +881,10 @@ mod tests {
             total_chunks += ds.feed(&data).len();
         }
 
-        assert!(total_chunks >= 9, "Expected >=9 chunks from stereo, got {}", total_chunks);
+        assert!(
+            total_chunks >= 9,
+            "Expected >=9 chunks from stereo, got {}",
+            total_chunks
+        );
     }
 }

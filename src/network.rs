@@ -2,13 +2,13 @@
 // Records audio → encodes as WAV base64 → sends to Gemini → returns transcription text.
 // No WebSocket, no streaming — simple and reliable.
 
-use anyhow::{Context, Result, bail};
-use base64::Engine;
+use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
-use serde_json::{Value, json};
+use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use serde_json::{json, Value};
 use tracing::{debug, error, warn};
 
 use crate::config::Config;
@@ -60,13 +60,15 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
     let url = config.api_url();
     let body = build_request_body(&wav_b64);
 
-    debug!(url = %url, "Sending request to Gemini API");
+    debug!(model = %config.model, "Sending request to Gemini API");
 
     // Step 3: Send HTTP POST (with auto-retry for 429/503)
+    // API key is sent via header, never in URL (security best practice).
     let client = http_client()?;
     let response = client
         .post(&url)
         .header("Content-Type", "application/json")
+        .header("x-goog-api-key", &config.api_key)
         .json(&body)
         .send()
         .await
@@ -82,10 +84,12 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
 
     if !status.is_success() {
         error!(status = %status, body = %truncate_str(&response_text, 500), "Gemini API error");
-        
+
         // Return a user-friendly error message that will be injected
         if status.as_u16() == 429 {
-            return Ok("[Errore: Troppe richieste (429). Attendi qualche secondo e riprova]".to_string());
+            return Ok(
+                "[Errore: Troppe richieste (429). Attendi qualche secondo e riprova]".to_string(),
+            );
         } else if status.as_u16() == 403 {
             return Ok("[Errore: API Key non valida o permessi insufficienti (403)]".to_string());
         } else {
@@ -94,8 +98,8 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
     }
 
     // Step 4: Parse the response
-    let parsed: Value = serde_json::from_str(&response_text)
-        .context("Failed to parse Gemini API JSON response")?;
+    let parsed: Value =
+        serde_json::from_str(&response_text).context("Failed to parse Gemini API JSON response")?;
 
     let transcription = extract_text(&parsed)?;
 
@@ -309,6 +313,54 @@ mod tests {
     #[test]
     fn test_truncate_str() {
         assert_eq!(truncate_str("hello", 10), "hello");
-        assert_eq!(truncate_str("hello world", 5), "hello…");
+        assert_eq!(truncate_str("hello world", 5), "hello\u{2026}");
+    }
+
+    #[test]
+    fn test_encode_wav_empty() {
+        let samples: Vec<i16> = vec![];
+        let wav = encode_wav(&samples);
+        // Header only, 0 data bytes
+        assert_eq!(wav.len(), 44);
+        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_size, 0);
+    }
+
+    #[test]
+    fn test_extract_text_multipart() {
+        let response = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"text": "ciao "},
+                        {"text": "mondo"}
+                    ]
+                },
+                "finishReason": "STOP"
+            }]
+        });
+        let text = extract_text(&response).unwrap();
+        assert_eq!(text, "ciao mondo");
+    }
+
+    #[test]
+    fn test_extract_text_no_candidates() {
+        let response = json!({});
+        let text = extract_text(&response).unwrap();
+        assert!(text.is_empty());
+    }
+
+    #[test]
+    fn test_extract_text_safety_block() {
+        let response = json!({
+            "candidates": [{
+                "content": {
+                    "parts": []
+                },
+                "finishReason": "SAFETY"
+            }]
+        });
+        let text = extract_text(&response).unwrap();
+        assert!(text.is_empty());
     }
 }

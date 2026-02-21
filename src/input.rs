@@ -61,22 +61,35 @@ pub fn parse_hotkey(raw: &str) -> Result<Hotkey> {
 
     for part in parts.iter() {
         match part.as_str() {
-            "ctrl" | "control" => { modifiers.insert(Modifier::Ctrl); }
-            "shift" => { modifiers.insert(Modifier::Shift); }
-            "alt" | "option" => { modifiers.insert(Modifier::Alt); }
-            "meta" | "super" | "win" | "cmd" | "command" => { modifiers.insert(Modifier::Meta); }
+            "ctrl" | "control" => {
+                modifiers.insert(Modifier::Ctrl);
+            }
+            "shift" => {
+                modifiers.insert(Modifier::Shift);
+            }
+            "alt" | "option" => {
+                modifiers.insert(Modifier::Alt);
+            }
+            "meta" | "super" | "win" | "cmd" | "command" => {
+                modifiers.insert(Modifier::Meta);
+            }
             _ => {
                 // This should be the trigger key (last part typically)
                 if trigger.is_some() {
                     anyhow::bail!("Multiple non-modifier keys in hotkey: '{}'. Use format like 'ctrl+shift+space'", raw);
                 }
-                trigger = Some(str_to_rdev_key(part)
-                    .with_context(|| format!("Unknown key '{}' in hotkey '{}'", part, raw))?);
+                trigger = Some(
+                    str_to_rdev_key(part)
+                        .with_context(|| format!("Unknown key '{}' in hotkey '{}'", part, raw))?,
+                );
             }
         }
     }
 
-    let trigger = trigger.context(format!("No trigger key found in hotkey '{}'. Need at least one non-modifier key.", raw))?;
+    let trigger = trigger.context(format!(
+        "No trigger key found in hotkey '{}'. Need at least one non-modifier key.",
+        raw
+    ))?;
 
     Ok(Hotkey {
         modifiers,
@@ -89,21 +102,56 @@ pub fn parse_hotkey(raw: &str) -> Result<Hotkey> {
 fn str_to_rdev_key(name: &str) -> Result<Key> {
     let key = match name {
         // Letters
-        "a" => Key::KeyA, "b" => Key::KeyB, "c" => Key::KeyC, "d" => Key::KeyD,
-        "e" => Key::KeyE, "f" => Key::KeyF, "g" => Key::KeyG, "h" => Key::KeyH,
-        "i" => Key::KeyI, "j" => Key::KeyJ, "k" => Key::KeyK, "l" => Key::KeyL,
-        "m" => Key::KeyM, "n" => Key::KeyN, "o" => Key::KeyO, "p" => Key::KeyP,
-        "q" => Key::KeyQ, "r" => Key::KeyR, "s" => Key::KeyS, "t" => Key::KeyT,
-        "u" => Key::KeyU, "v" => Key::KeyV, "w" => Key::KeyW, "x" => Key::KeyX,
-        "y" => Key::KeyY, "z" => Key::KeyZ,
+        "a" => Key::KeyA,
+        "b" => Key::KeyB,
+        "c" => Key::KeyC,
+        "d" => Key::KeyD,
+        "e" => Key::KeyE,
+        "f" => Key::KeyF,
+        "g" => Key::KeyG,
+        "h" => Key::KeyH,
+        "i" => Key::KeyI,
+        "j" => Key::KeyJ,
+        "k" => Key::KeyK,
+        "l" => Key::KeyL,
+        "m" => Key::KeyM,
+        "n" => Key::KeyN,
+        "o" => Key::KeyO,
+        "p" => Key::KeyP,
+        "q" => Key::KeyQ,
+        "r" => Key::KeyR,
+        "s" => Key::KeyS,
+        "t" => Key::KeyT,
+        "u" => Key::KeyU,
+        "v" => Key::KeyV,
+        "w" => Key::KeyW,
+        "x" => Key::KeyX,
+        "y" => Key::KeyY,
+        "z" => Key::KeyZ,
         // Numbers
-        "0" => Key::Num0, "1" => Key::Num1, "2" => Key::Num2, "3" => Key::Num3,
-        "4" => Key::Num4, "5" => Key::Num5, "6" => Key::Num6, "7" => Key::Num7,
-        "8" => Key::Num8, "9" => Key::Num9,
+        "0" => Key::Num0,
+        "1" => Key::Num1,
+        "2" => Key::Num2,
+        "3" => Key::Num3,
+        "4" => Key::Num4,
+        "5" => Key::Num5,
+        "6" => Key::Num6,
+        "7" => Key::Num7,
+        "8" => Key::Num8,
+        "9" => Key::Num9,
         // Function keys
-        "f1" => Key::F1, "f2" => Key::F2, "f3" => Key::F3, "f4" => Key::F4,
-        "f5" => Key::F5, "f6" => Key::F6, "f7" => Key::F7, "f8" => Key::F8,
-        "f9" => Key::F9, "f10" => Key::F10, "f11" => Key::F11, "f12" => Key::F12,
+        "f1" => Key::F1,
+        "f2" => Key::F2,
+        "f3" => Key::F3,
+        "f4" => Key::F4,
+        "f5" => Key::F5,
+        "f6" => Key::F6,
+        "f7" => Key::F7,
+        "f8" => Key::F8,
+        "f9" => Key::F9,
+        "f10" => Key::F10,
+        "f11" => Key::F11,
+        "f12" => Key::F12,
         // Special keys
         "space" | "spacebar" => Key::Space,
         "enter" | "return" => Key::Return,
@@ -195,7 +243,11 @@ impl HookState {
 
     fn check_combo(&mut self) {
         // All required modifiers must be held AND the trigger key
-        let all_mods = self.hotkey.modifiers.iter().all(|m| self.held_modifiers.contains(m));
+        let all_mods = self
+            .hotkey
+            .modifiers
+            .iter()
+            .all(|m| self.held_modifiers.contains(m));
         if all_mods && self.trigger_held && !self.recording {
             let now = Instant::now();
             if now.duration_since(self.last_trigger).as_millis() < DEBOUNCE_MS as u128 {
@@ -214,7 +266,11 @@ impl HookState {
     fn check_release(&mut self) {
         if self.recording {
             // Stop when trigger is released OR any required modifier is released
-            let all_mods = self.hotkey.modifiers.iter().all(|m| self.held_modifiers.contains(m));
+            let all_mods = self
+                .hotkey
+                .modifiers
+                .iter()
+                .all(|m| self.held_modifiers.contains(m));
             if !self.trigger_held || !all_mods {
                 self.recording = false;
                 debug!(hotkey = %self.hotkey.label, "Hotkey released");
@@ -244,7 +300,11 @@ fn key_to_modifier(key: Key) -> Option<Modifier> {
 ///
 /// `tx` — channel for sending Start/Stop signals to the async event loop.
 /// `hotkey` — the parsed hotkey combo to listen for.
-pub fn spawn_listener(tx: InputTx, shutdown: Arc<AtomicBool>, hotkey: Hotkey) -> Result<std::thread::JoinHandle<()>> {
+pub fn spawn_listener(
+    tx: InputTx,
+    shutdown: Arc<AtomicBool>,
+    hotkey: Hotkey,
+) -> Result<std::thread::JoinHandle<()>> {
     let label = hotkey.label.clone();
     let handle = std::thread::Builder::new()
         .name("g-type-input".into())
