@@ -224,7 +224,7 @@ pub fn set_api_key(key: &str) -> Result<()> {
 
     cfg.api_key = key.to_string();
     save(&cfg, &path)?;
-    println!("  \\x1b[32m✔ API key updated.\\x1b[0m");
+    println!("  \x1b[32m✔ API key updated.\x1b[0m");
     Ok(())
 }
 
