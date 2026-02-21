@@ -196,11 +196,15 @@ fn pick_input_config(device: &Device) -> Result<(StreamConfig, SampleFormat)> {
     Ok((fallback, fmt))
 }
 
-/// Simple linear downsampler: picks nearest sample for rate conversion.
+/// Accumulates raw audio, mixes to mono, resamples to 16kHz, and emits
+/// fixed-size chunks of `SAMPLES_PER_CHUNK` samples.
 struct Downsampler {
     source_rate: u32,
     source_channels: u16,
-    buffer: Vec<i16>,
+    /// Accumulated mono 16kHz output samples, waiting to fill a chunk.
+    out_buf: Vec<i16>,
+    /// Fractional position tracker for streaming resample across calls.
+    resample_pos: f64,
 }
 
 impl Downsampler {
@@ -208,51 +212,78 @@ impl Downsampler {
         Self {
             source_rate,
             source_channels,
-            buffer: Vec::with_capacity(SAMPLES_PER_CHUNK * 2),
+            out_buf: Vec::with_capacity(SAMPLES_PER_CHUNK * 2),
+            resample_pos: 0.0,
         }
     }
 
-    /// Feed raw i16 samples (possibly multi-channel, possibly different rate).
+    /// Feed raw interleaved samples (possibly multi-channel, possibly different rate).
     /// Returns complete chunks of SAMPLES_PER_CHUNK mono 16kHz samples.
     fn feed(&mut self, samples: &[i16]) -> Vec<AudioChunk> {
-        let ratio = self.source_rate as f64 / TARGET_RATE as f64;
         let ch = self.source_channels as usize;
-
-        // Mix to mono and downsample
-        let frames = samples.len() / ch;
-        for frame_idx in 0..frames {
-            let mono: i32 = (0..ch)
-                .map(|c| samples[frame_idx * ch + c] as i32)
-                .sum::<i32>()
-                / ch as i32;
-
-            // Accumulate position tracking via buffer length
-            let target_sample_idx = (self.buffer.len() as f64 * ratio) as usize;
-            let source_sample_idx = (frame_idx as f64) + (self.buffer.len() as f64 * ratio)
-                - (self.buffer.len() as f64 * ratio);
-            let _ = (target_sample_idx, source_sample_idx); // suppress warnings
-
-            self.buffer.push(mono as i16);
+        if ch == 0 || samples.is_empty() {
+            return Vec::new();
         }
 
-        // If source rate differs, resample the buffer
-        if self.source_rate != TARGET_RATE {
-            let resampled = resample_linear(&self.buffer, self.source_rate, TARGET_RATE);
-            self.buffer.clear();
-            self.buffer = resampled;
+        let frames = samples.len() / ch;
+
+        if self.source_rate == TARGET_RATE {
+            // No resampling needed — just mono-mix and accumulate
+            for frame_idx in 0..frames {
+                let mono: i32 = (0..ch)
+                    .map(|c| samples[frame_idx * ch + c] as i32)
+                    .sum::<i32>()
+                    / ch as i32;
+                self.out_buf.push(mono as i16);
+            }
+        } else {
+            // Streaming resample: step through source frames at the target rate,
+            // using linear interpolation. We maintain `resample_pos` across calls
+            // so that we never lose or duplicate samples at callback boundaries.
+            let step = self.source_rate as f64 / TARGET_RATE as f64;
+
+            while self.resample_pos < frames as f64 {
+                let idx = self.resample_pos as usize;
+                let frac = self.resample_pos - idx as f64;
+
+                // Mono-mix frame at `idx`
+                let s0: f64 = (0..ch)
+                    .map(|c| samples[idx * ch + c] as f64)
+                    .sum::<f64>()
+                    / ch as f64;
+
+                let sample = if idx + 1 < frames {
+                    // Mono-mix frame at `idx+1` for interpolation
+                    let s1: f64 = (0..ch)
+                        .map(|c| samples[(idx + 1) * ch + c] as f64)
+                        .sum::<f64>()
+                        / ch as f64;
+                    s0 * (1.0 - frac) + s1 * frac
+                } else {
+                    s0
+                };
+
+                self.out_buf.push(sample as i16);
+                self.resample_pos += step;
+            }
+
+            // Subtract the frames we consumed so the position is relative
+            // to the start of the NEXT callback's data.
+            self.resample_pos -= frames as f64;
         }
 
         // Extract complete chunks
         let mut chunks = Vec::new();
-        while self.buffer.len() >= SAMPLES_PER_CHUNK {
-            let chunk: Vec<i16> = self.buffer.drain(..SAMPLES_PER_CHUNK).collect();
+        while self.out_buf.len() >= SAMPLES_PER_CHUNK {
+            let chunk: Vec<i16> = self.out_buf.drain(..SAMPLES_PER_CHUNK).collect();
             chunks.push(chunk);
         }
         chunks
     }
 }
 
-/// Linear interpolation resampling.
+/// Linear interpolation resampling (used in tests).
+#[allow(dead_code)]
 fn resample_linear(input: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
     if input.is_empty() {
         return Vec::new();
@@ -690,5 +721,53 @@ mod tests {
         assert_eq!(i32_to_i16(0), 0);
         assert_eq!(i32_to_i16(i32::MAX), i16::MAX);
         assert_eq!(i32_to_i16(i32::MIN), i16::MIN);
+    }
+
+    #[test]
+    fn test_downsampler_44100_to_16000() {
+        // Simulate cpal callbacks at 44100Hz mono, ~283 samples per callback
+        // (44100 / ~156 callbacks per second ≈ 283 samples per callback)
+        let mut ds = Downsampler::new(44100, 1);
+        let mut total_chunks = 0;
+
+        // Feed 156 callbacks worth of data (simulating ~1 second of audio)
+        for _ in 0..156 {
+            let data: Vec<i16> = (0..283).map(|i| (i * 100 % 30000) as i16).collect();
+            let chunks = ds.feed(&data);
+            total_chunks += chunks.len();
+        }
+
+        // 156 callbacks × 283 samples = 44148 samples at 44100Hz
+        // At 16kHz output = ~16017 samples → ~10 chunks of 1600
+        assert!(total_chunks >= 9, "Expected >=9 chunks, got {}", total_chunks);
+        assert!(total_chunks <= 11, "Expected <=11 chunks, got {}", total_chunks);
+    }
+
+    #[test]
+    fn test_downsampler_16000_passthrough() {
+        // When source rate == target rate, no resampling needed
+        let mut ds = Downsampler::new(16000, 1);
+        let mut total_chunks = 0;
+
+        // Feed exactly 3200 samples = 2 chunks
+        let data: Vec<i16> = (0..3200).map(|i| (i % 1000) as i16).collect();
+        total_chunks += ds.feed(&data).len();
+
+        assert_eq!(total_chunks, 2, "Expected exactly 2 chunks at native 16kHz");
+    }
+
+    #[test]
+    fn test_downsampler_stereo() {
+        // Stereo 44100Hz → mono 16kHz
+        let mut ds = Downsampler::new(44100, 2);
+        let mut total_chunks = 0;
+
+        // Feed 156 callbacks of stereo data (566 interleaved samples = 283 frames)
+        for _ in 0..156 {
+            let data: Vec<i16> = (0..566).map(|i| (i * 50 % 20000) as i16).collect();
+            total_chunks += ds.feed(&data).len();
+        }
+
+        assert!(total_chunks >= 9, "Expected >=9 chunks from stereo, got {}", total_chunks);
     }
 }

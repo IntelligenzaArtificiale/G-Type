@@ -1,6 +1,6 @@
 [package]
 name = "g-type"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Global walkie-talkie dictation daemon powered by Gemini REST API"
 license = "MIT"
