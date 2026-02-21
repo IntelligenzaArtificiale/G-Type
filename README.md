@@ -1,8 +1,16 @@
 # G-Type
 
+<p align="center">
+  <a href="README.md">English</a> •
+  <a href="README.it.md">Italiano</a> •
+  <a href="README.es.md">Español</a> •
+  <a href="README.pt-BR.md">Português (BR)</a> •
+  <a href="README.hi.md">हिन्दी</a>
+</p>
+
 **Global voice dictation daemon.** Hold a hotkey anywhere on your system, speak, release — your words appear as typed text.
 
-Speaking is **3–5× faster** than typing. An average person types 40 WPM but speaks at 150 WPM. G-Type removes the friction: one hotkey, zero UI, works in every app.
+Voice input is [**~3× faster** than typing](BENCHMARK.md) in text-entry scenarios ([Stanford/UW/Baidu, 2016](https://news.stanford.edu/stories/2016/08/stanford-study-speech-recognition-faster-texting)). G-Type removes the friction: one hotkey, zero UI, works in every app.
 
 Powered by Google Gemini REST API. Single static binary. ~5 MB.
 
