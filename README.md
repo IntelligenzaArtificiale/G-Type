@@ -51,23 +51,31 @@ cargo install --path .
 
 ## Configuration
 
-On first run, G-Type creates a config file at:
+On first run, G-Type launches an **interactive setup wizard** — no manual file editing needed:
+
+```
+╔══════════════════════════════════════════════╗
+║         G-Type — First Time Setup            ║
+╚══════════════════════════════════════════════╝
+
+  G-Type needs a Google Gemini API key to work.
+  Get one free at: https://aistudio.google.com/apikey
+
+  Gemini API Key: <paste your key here>
+  Model [models/gemini-2.0-flash]: 
+  Hotkey [ctrl+t]: 
+
+  ✔ Config saved to ~/.config/g-type/config.toml
+  ✔ You can re-run setup anytime with: g-type setup
+```
+
+Config file locations:
 
 | OS      | Path                                    |
 |---------|-----------------------------------------|
 | Linux   | `~/.config/g-type/config.toml`          |
 | macOS   | `~/Library/Application Support/g-type/config.toml` |
 | Windows | `%APPDATA%\g-type\config.toml`          |
-
-```toml
-api_key = "YOUR_GEMINI_API_KEY_HERE"
-model = "models/gemini-2.0-flash"
-hotkey = "ctrl+t"
-injection_threshold = 80
-timeout_secs = 3
-```
-
-Get your API key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
 
 ### Options
 
@@ -82,8 +90,17 @@ Get your API key at [aistudio.google.com/apikey](https://aistudio.google.com/api
 ## Usage
 
 ```bash
-# Start the daemon
+# Start the daemon (auto-setup on first run)
 g-type
+
+# Re-run setup wizard
+g-type setup
+
+# Update just the API key
+g-type set-key YOUR_NEW_KEY
+
+# Show config file path
+g-type config
 
 # With debug logging
 RUST_LOG=g_type=debug g-type

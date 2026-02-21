@@ -1,13 +1,13 @@
 // config.rs — Safe TOML config loading with XDG-compliant directory resolution.
 // Interactive setup wizard for first-run. No manual file editing required.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Application configuration persisted to disk.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -279,32 +279,5 @@ mod tests {
         let result = prompt_required(&mut reader, "Key: ");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "my-api-key");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ws_url_construction() {
-        let cfg = Config {
-            api_key: "test-key-123".into(),
-            model: default_model(),
-            hotkey: default_hotkey(),
-            injection_threshold: 80,
-            timeout_secs: 3,
-        };
-        let url = cfg.ws_url();
-        assert!(url.contains("test-key-123"));
-        assert!(url.starts_with("wss://"));
-    }
-
-    #[test]
-    fn test_defaults() {
-        let raw = r#"api_key = "abc""#;
-        let cfg: Config = toml::from_str(raw).unwrap();
-        assert_eq!(cfg.model, "models/gemini-2.0-flash");
-        assert_eq!(cfg.injection_threshold, 80);
     }
 }
