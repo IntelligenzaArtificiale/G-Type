@@ -1,8 +1,8 @@
 [package]
 name = "g-type"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
-description = "Global walkie-talkie dictation daemon powered by Gemini 2.0 Flash Live API"
+description = "Global walkie-talkie dictation daemon powered by Gemini REST API"
 license = "MIT"
 repository = "https://github.com/IntelligenzaArtificiale/g-type"
 readme = "README.md"
@@ -15,8 +15,8 @@ path = "src/main.rs"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# WebSocket + TLS
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+# HTTP client for Gemini REST API
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 
 # Audio capture
 cpal = "0.15"
@@ -47,13 +47,6 @@ base64 = "0.22"
 
 # Config directory resolution
 directories = "5"
-
-# URL / HTTP (for TLS connector)
-native-tls = "0.2"
-url = "2"
-
-# Async futures utilities
-futures-util = { version = "0.3", features = ["sink"] }
 
 [profile.release]
 opt-level = 3

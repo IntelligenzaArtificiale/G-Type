@@ -40,11 +40,14 @@ fn default_timeout_secs() -> u64 {
 }
 
 impl Config {
-    /// Build the WebSocket URL from the stored API key and model.
-    pub fn ws_url(&self) -> String {
+    /// Build the REST API URL for Gemini generateContent endpoint.
+    pub fn api_url(&self) -> String {
+        // Model format in config: "models/gemini-2.0-flash"
+        // API URL format: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=KEY
+        let model_name = self.model.strip_prefix("models/").unwrap_or(&self.model);
         format!(
-            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={}",
-            self.api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+            model_name, self.api_key
         )
     }
 }
@@ -233,7 +236,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ws_url_construction() {
+    fn test_api_url_construction() {
         let cfg = Config {
             api_key: "test-key-123".into(),
             model: default_model(),
@@ -241,9 +244,11 @@ mod tests {
             injection_threshold: 80,
             timeout_secs: 3,
         };
-        let url = cfg.ws_url();
+        let url = cfg.api_url();
         assert!(url.contains("test-key-123"));
-        assert!(url.starts_with("wss://"));
+        assert!(url.contains("gemini-2.0-flash"));
+        assert!(url.contains("generateContent"));
+        assert!(url.starts_with("https://"));
     }
 
     #[test]

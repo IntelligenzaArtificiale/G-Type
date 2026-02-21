@@ -112,16 +112,13 @@ async fn state_idle(input_rx: &mut InputRx, hotkey_label: &str) -> State {
     }
 }
 
-/// Recording state: start audio capture + WebSocket, stream until Stop signal.
+/// Recording state: capture audio to buffer, then send to Gemini REST API.
 /// Handles the full lifecycle: Recording → Processing → Injecting → Idle.
 async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label: &str) -> State {
-    info!("State: RECORDING — capturing audio and streaming to Gemini");
+    info!("State: RECORDING — capturing audio to buffer");
 
     // Audio capture channel
-    let (audio_tx, audio_rx) = mpsc::channel::<audio::AudioChunk>(64);
-
-    // Stop signal channel for the network task
-    let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
+    let (audio_tx, mut audio_rx) = mpsc::channel::<audio::AudioChunk>(64);
 
     // Atomic flag to control audio capture thread
     let recording_flag = Arc::new(AtomicBool::new(true));
@@ -134,27 +131,43 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         return State::Idle;
     }
 
-    // Spawn the network transcription task
-    let config_clone = config.clone();
-    let transcribe_handle = tokio::spawn(async move {
-        network::transcribe(&config_clone, audio_rx, stop_rx).await
-    });
+    // Accumulate all audio samples in memory
+    let mut all_samples: Vec<i16> = Vec::new();
 
-    // Wait for Stop signal from keyboard
+    // Collect audio chunks until Stop signal
     loop {
-        match input_rx.recv().await {
-            Some(InputSignal::Stop) => {
-                info!("State: RECORDING → PROCESSING");
-                break;
+        tokio::select! {
+            signal = input_rx.recv() => {
+                match signal {
+                    Some(InputSignal::Stop) => {
+                        info!(
+                            samples = all_samples.len(),
+                            duration_secs = format!("{:.1}", all_samples.len() as f64 / 16_000.0),
+                            "State: RECORDING → PROCESSING"
+                        );
+                        break;
+                    }
+                    Some(InputSignal::Start) => {
+                        // Double press while recording, ignore
+                        continue;
+                    }
+                    None => {
+                        error!("Input channel closed during recording");
+                        recording_flag.store(false, Ordering::Relaxed);
+                        return State::Idle;
+                    }
+                }
             }
-            Some(InputSignal::Start) => {
-                // Double press while recording, ignore
-                continue;
-            }
-            None => {
-                error!("Input channel closed during recording");
-                recording_flag.store(false, Ordering::Relaxed);
-                return State::Idle;
+            chunk = audio_rx.recv() => {
+                match chunk {
+                    Some(pcm_data) => {
+                        all_samples.extend_from_slice(&pcm_data);
+                    }
+                    None => {
+                        // Audio channel closed unexpectedly
+                        break;
+                    }
+                }
             }
         }
     }
@@ -162,22 +175,27 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
     // Stop audio capture
     recording_flag.store(false, Ordering::Relaxed);
 
-    // Signal the network task that recording is done
-    if let Err(e) = stop_tx.send(()).await {
-        warn!(%e, "Failed to send stop signal to network task");
+    // Drain any remaining chunks still in the channel
+    while let Ok(chunk) = audio_rx.try_recv() {
+        all_samples.extend_from_slice(&chunk);
     }
 
-    // Wait for transcription result
-    info!("State: PROCESSING — waiting for transcription...");
-    let transcription = match transcribe_handle.await {
-        Ok(Ok(text)) => text,
-        Ok(Err(e)) => {
+    if all_samples.is_empty() {
+        warn!("No audio captured, skipping transcription");
+        return State::Idle;
+    }
+
+    // Send all audio to Gemini REST API for transcription
+    info!(
+        samples = all_samples.len(),
+        "State: PROCESSING — sending audio to Gemini API..."
+    );
+
+    let transcription = match network::transcribe(config, &all_samples).await {
+        Ok(text) => text,
+        Err(e) => {
             error!(%e, "Transcription failed");
             warn!("Returning to idle due to transcription failure");
-            return State::Idle;
-        }
-        Err(e) => {
-            error!(%e, "Transcription task panicked");
             return State::Idle;
         }
     };

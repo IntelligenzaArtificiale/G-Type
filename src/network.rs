@@ -1,277 +1,214 @@
-// network.rs — WebSocket client for Gemini 2.0 Flash BidiGenerateContent Live API.
-// Handles TLS handshake, setup message, audio streaming, and response parsing.
+// network.rs — HTTP client for Gemini generateContent REST API.
+// Records audio → encodes as WAV base64 → sends to Gemini → returns transcription text.
+// No WebSocket, no streaming — simple and reliable.
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
-use tokio::time::{Duration, timeout};
-use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
-use crate::audio::AudioChunk;
 use crate::config::Config;
 
-/// Connect to Gemini Live API, stream audio chunks, collect transcription.
+/// HTTP client singleton (reuses connections).
+fn http_client() -> Result<Client> {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .context("Failed to build HTTP client")
+}
+
+/// Transcribe audio samples using Gemini REST API.
 ///
 /// - `config`: App config with API key and model.
-/// - `audio_rx`: Receives PCM i16 audio chunks from the capture thread.
-/// - `stop_rx`: Receives a signal when recording stops (hotkey released).
+/// - `samples`: All recorded PCM i16 16kHz mono samples.
 ///
-/// Returns the accumulated transcription text.
-pub async fn transcribe(
-    config: &Config,
-    mut audio_rx: mpsc::Receiver<AudioChunk>,
-    mut stop_rx: mpsc::Receiver<()>,
-) -> Result<String> {
-    let url = config.ws_url();
-    info!("Connecting to Gemini Live API...");
+/// Returns the transcription text.
+pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
+    if samples.is_empty() {
+        bail!("No audio samples to transcribe");
+    }
 
-    // Connect with TLS
-    let (ws_stream, response) = tokio_tungstenite::connect_async(&url)
+    let duration_secs = samples.len() as f64 / 16_000.0;
+    info!(
+        samples = samples.len(),
+        duration_secs = format!("{:.1}", duration_secs),
+        "Transcribing audio via Gemini REST API..."
+    );
+
+    // Step 1: Encode PCM samples as WAV in memory
+    let wav_bytes = encode_wav(samples);
+    let wav_b64 = BASE64.encode(&wav_bytes);
+
+    debug!(
+        wav_size = wav_bytes.len(),
+        b64_size = wav_b64.len(),
+        "Audio encoded as WAV"
+    );
+
+    // Step 2: Build the API request
+    let url = config.api_url();
+    let body = build_request_body(&wav_b64);
+
+    debug!(url = %url, "Sending request to Gemini API");
+
+    // Step 3: Send HTTP POST
+    let client = http_client()?;
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
         .await
-        .context("WebSocket connection to Gemini failed")?;
+        .context("HTTP request to Gemini API failed")?;
 
-    debug!(status = ?response.status(), "WebSocket connected");
-
-    let (mut sink, mut stream) = ws_stream.split();
-
-    // Step 1: Send setup message
-    let setup_msg = build_setup_message(config);
-    sink.send(Message::Text(setup_msg.to_string()))
+    let status = response.status();
+    let response_text = response
+        .text()
         .await
-        .context("Failed to send setup message")?;
+        .context("Failed to read API response body")?;
 
-    info!("Setup message sent, waiting for confirmation...");
+    debug!(status = %status, body_len = response_text.len(), "API response received");
 
-    // Wait for setup confirmation from server (MUST complete before we process stop)
-    match timeout(Duration::from_secs(10), stream.next()).await {
-        Ok(Some(Ok(msg))) => {
-            debug!(msg = %msg, "Setup response received");
-        }
-        Ok(Some(Err(e))) => {
-            bail!("Error receiving setup response: {}", e);
-        }
-        Ok(None) => {
-            bail!("WebSocket closed before setup confirmation");
-        }
-        Err(_) => {
-            bail!("Timeout waiting for setup confirmation (10s)");
-        }
+    if !status.is_success() {
+        error!(status = %status, body = %truncate_str(&response_text, 500), "Gemini API error");
+        bail!(
+            "Gemini API returned HTTP {}: {}",
+            status,
+            truncate_str(&response_text, 200)
+        );
     }
 
-    info!("Setup confirmed, streaming audio...");
+    // Step 4: Parse the response
+    let parsed: Value = serde_json::from_str(&response_text)
+        .context("Failed to parse Gemini API JSON response")?;
 
-    // Step 2: Stream audio chunks until stop signal
-    // Drain any pending stop signal that arrived during setup
-    let already_stopped = stop_rx.try_recv().is_ok();
-    let mut chunks_sent: u64 = 0;
+    let transcription = extract_text(&parsed)?;
 
-    if !already_stopped {
-        let mut recording = true;
-        while recording {
-            tokio::select! {
-                // Check for stop signal
-                _ = stop_rx.recv() => {
-                    info!(chunks_sent, "Stop signal received, finishing audio stream");
-                    recording = false;
-                }
-                // Send audio chunks as they arrive
-                chunk = audio_rx.recv() => {
-                    match chunk {
-                        Some(pcm_data) => {
-                            let msg = encode_audio_chunk(&pcm_data);
-                            if let Err(e) = sink.send(Message::Text(msg.to_string())).await {
-                                error!(%e, "Failed to send audio chunk");
-                                bail!("WebSocket send error: {}", e);
-                            }
-                            chunks_sent += 1;
-                        }
-                        None => {
-                            debug!("Audio channel closed");
-                            recording = false;
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        info!("Stop arrived during setup, draining buffered audio...");
-    }
+    info!(
+        text_len = transcription.len(),
+        text_preview = %truncate_str(&transcription, 80),
+        "Transcription received"
+    );
 
-    // Drain any remaining chunks in the channel
-    while let Ok(chunk) = audio_rx.try_recv() {
-        let msg = encode_audio_chunk(&chunk);
-        if let Err(e) = sink.send(Message::Text(msg.to_string())).await {
-            warn!(%e, "Failed to send trailing audio chunk");
-            break;
-        }
-        chunks_sent += 1;
-    }
-
-    // If no audio was captured at all, send a brief silence chunk so the API
-    // has something to process (avoids protocol errors on empty sessions)
-    if chunks_sent == 0 {
-        warn!("No audio chunks captured, sending silence");
-        let silence = vec![0i16; 1600]; // 100ms of silence
-        let msg = encode_audio_chunk(&silence);
-        sink.send(Message::Text(msg.to_string()))
-            .await
-            .context("Failed to send silence chunk")?;
-    }
-
-    // Step 3: Send turnComplete signal
-    let turn_complete = json!({
-        "clientContent": {
-            "turnComplete": true
-        }
-    });
-    sink.send(Message::Text(turn_complete.to_string()))
-        .await
-        .context("Failed to send turnComplete")?;
-
-    info!(chunks_sent, "turnComplete sent, awaiting transcription...");
-
-    // Step 4: Accumulate text response until server sends turnComplete
-    let mut transcription = String::new();
-    let deadline = Duration::from_secs(config.timeout_secs.max(3));
-
-    loop {
-        match timeout(deadline, stream.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => {
-                match parse_server_message(&text) {
-                    ServerEvent::TextDelta(delta) => {
-                        transcription.push_str(&delta);
-                        debug!(delta = %delta, "Text fragment received");
-                    }
-                    ServerEvent::TurnComplete => {
-                        info!(len = transcription.len(), "Transcription complete");
-                        break;
-                    }
-                    ServerEvent::SetupComplete => {
-                        debug!("Late setup complete message (ignored)");
-                    }
-                    ServerEvent::Unknown(raw) => {
-                        debug!(msg = %raw, "Unknown server message");
-                    }
-                }
-            }
-            Ok(Some(Ok(Message::Close(_)))) => {
-                warn!("WebSocket closed by server before turnComplete");
-                break;
-            }
-            Ok(Some(Ok(_))) => {
-                // Binary or other message types — skip
-                continue;
-            }
-            Ok(Some(Err(e))) => {
-                error!(%e, "WebSocket receive error");
-                break;
-            }
-            Ok(None) => {
-                warn!("WebSocket stream ended");
-                break;
-            }
-            Err(_) => {
-                warn!(timeout_secs = config.timeout_secs, "Timeout waiting for transcription");
-                break;
-            }
-        }
-    }
-
-    // Close the WebSocket gracefully
-    if let Err(e) = sink.close().await {
-        debug!(%e, "WebSocket close error (non-fatal)");
-    }
-
-    Ok(transcription.trim().to_string())
+    Ok(transcription)
 }
 
-/// Server events we care about.
-enum ServerEvent {
-    TextDelta(String),
-    TurnComplete,
-    SetupComplete,
-    Unknown(String),
-}
-
-/// Parse a server JSON message into a structured event.
-fn parse_server_message(raw: &str) -> ServerEvent {
-    let parsed: Result<Value, _> = serde_json::from_str(raw);
-    let value = match parsed {
-        Ok(v) => v,
-        Err(_) => return ServerEvent::Unknown(raw.to_string()),
-    };
-
-    // Check for setupComplete
-    if value.get("setupComplete").is_some() {
-        return ServerEvent::SetupComplete;
-    }
-
-    // Check for serverContent
-    if let Some(server_content) = value.get("serverContent") {
-        // Check turnComplete
-        if server_content.get("turnComplete").and_then(|v| v.as_bool()) == Some(true) {
-            return ServerEvent::TurnComplete;
-        }
-
-        // Extract text from modelTurn.parts[].text
-        if let Some(model_turn) = server_content.get("modelTurn") {
-            if let Some(parts) = model_turn.get("parts").and_then(|p| p.as_array()) {
-                let mut text = String::new();
-                for part in parts {
-                    if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                        text.push_str(t);
-                    }
-                }
-                if !text.is_empty() {
-                    return ServerEvent::TextDelta(text);
-                }
-            }
-        }
-    }
-
-    ServerEvent::Unknown(raw.to_string())
-}
-
-/// Build the JSON setup message for Gemini Live API.
-fn build_setup_message(config: &Config) -> Value {
+/// Build the JSON body for Gemini generateContent with inline audio.
+fn build_request_body(wav_b64: &str) -> Value {
     json!({
-        "setup": {
-            "model": config.model,
-            "generationConfig": {
-                "responseModalities": ["TEXT"],
-                "temperature": 0.0
-            },
-            "systemInstruction": {
-                "parts": [{
-                    "text": "Sei un motore di dettatura passivo. Il tuo unico compito è trascrivere esattamente ciò che l'utente dice nell'audio, parola per parola, senza aggiungere punteggiatura inventata, senza commentare e senza rispondere alle domande. Restituisci solo la trascrizione pura."
-                }]
-            }
+        "contents": [{
+            "parts": [
+                {
+                    "text": "Trascrivi esattamente ciò che viene detto in questo audio, parola per parola. Non aggiungere commenti, non rispondere a domande, non inventare punteggiatura. Restituisci SOLO il testo dettato. Se l'audio è silenzioso o incomprensibile, rispondi con una stringa vuota."
+                },
+                {
+                    "inlineData": {
+                        "mimeType": "audio/wav",
+                        "data": wav_b64
+                    }
+                }
+            ]
+        }],
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 4096
         }
     })
 }
 
-/// Encode a PCM i16 chunk to base64 and wrap in the realtimeInput JSON envelope.
-fn encode_audio_chunk(samples: &[i16]) -> Value {
-    // Convert i16 samples to raw bytes (little-endian)
-    let mut bytes = Vec::with_capacity(samples.len() * 2);
+/// Extract text from Gemini generateContent response.
+fn extract_text(response: &Value) -> Result<String> {
+    // Standard response format:
+    // { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }
+    if let Some(candidates) = response.get("candidates").and_then(|c| c.as_array()) {
+        if let Some(first) = candidates.first() {
+            if let Some(content) = first.get("content") {
+                if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                    let mut text = String::new();
+                    for part in parts {
+                        if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                            text.push_str(t);
+                        }
+                    }
+                    if !text.is_empty() {
+                        return Ok(text.trim().to_string());
+                    }
+                }
+            }
+
+            // Check for safety/block reasons
+            if let Some(reason) = first.get("finishReason").and_then(|r| r.as_str()) {
+                if reason != "STOP" {
+                    warn!(reason, "Gemini response had non-STOP finish reason");
+                }
+            }
+        }
+    }
+
+    // Check for error in response
+    if let Some(error) = response.get("error") {
+        let msg = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown API error");
+        bail!("Gemini API error: {}", msg);
+    }
+
+    warn!(
+        response = %truncate_str(&response.to_string(), 300),
+        "Could not extract text from Gemini response"
+    );
+    Ok(String::new())
+}
+
+/// Encode PCM i16 mono 16kHz samples as a WAV file in memory.
+pub fn encode_wav(samples: &[i16]) -> Vec<u8> {
+    let num_channels: u16 = 1;
+    let sample_rate: u32 = 16_000;
+    let bits_per_sample: u16 = 16;
+    let byte_rate = sample_rate * (num_channels as u32) * (bits_per_sample as u32 / 8);
+    let block_align = num_channels * (bits_per_sample / 8);
+    let data_size = (samples.len() * 2) as u32;
+    let file_size = 36 + data_size; // RIFF header is 44 bytes, file_size = total - 8
+
+    let mut buf = Vec::with_capacity(44 + data_size as usize);
+
+    // RIFF header
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&file_size.to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+
+    // fmt sub-chunk
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes()); // sub-chunk size (PCM = 16)
+    buf.extend_from_slice(&1u16.to_le_bytes()); // audio format (PCM = 1)
+    buf.extend_from_slice(&num_channels.to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&byte_rate.to_le_bytes());
+    buf.extend_from_slice(&block_align.to_le_bytes());
+    buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+
+    // data sub-chunk
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_size.to_le_bytes());
+
+    // PCM samples (little-endian i16)
     for &sample in samples {
-        bytes.extend_from_slice(&sample.to_le_bytes());
+        buf.extend_from_slice(&sample.to_le_bytes());
     }
 
-    let b64 = BASE64.encode(&bytes);
+    buf
+}
 
-    json!({
-        "realtimeInput": {
-            "mediaChunks": [{
-                "mimeType": "audio/pcm;rate=16000",
-                "data": b64
-            }]
-        }
-    })
+/// Truncate a string for display.
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
 }
 
 #[cfg(test)]
@@ -279,54 +216,85 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_setup_message() {
-        let config = Config {
-            api_key: "test".into(),
-            model: "models/gemini-2.0-flash".into(),
-            hotkey: "ctrl+shift+space".into(),
-            injection_threshold: 80,
-            timeout_secs: 3,
-        };
-        let msg = build_setup_message(&config);
-        assert_eq!(msg["setup"]["model"], "models/gemini-2.0-flash");
-        assert_eq!(msg["setup"]["generationConfig"]["responseModalities"][0], "TEXT");
+    fn test_encode_wav_header() {
+        let samples: Vec<i16> = vec![0; 1600]; // 100ms at 16kHz
+        let wav = encode_wav(&samples);
+
+        // Check RIFF header
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        assert_eq!(&wav[36..40], b"data");
+
+        // Data size should be samples * 2 bytes
+        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_size, 3200); // 1600 samples * 2 bytes
     }
 
     #[test]
-    fn test_encode_audio_chunk() {
-        let samples: Vec<i16> = vec![0, 100, -100, i16::MAX, i16::MIN];
-        let msg = encode_audio_chunk(&samples);
-        assert!(msg["realtimeInput"]["mediaChunks"][0]["data"].is_string());
+    fn test_encode_wav_total_size() {
+        let samples: Vec<i16> = vec![100, -100, 0, i16::MAX, i16::MIN];
+        let wav = encode_wav(&samples);
+        assert_eq!(wav.len(), 44 + samples.len() * 2); // 44 header + data
+    }
+
+    #[test]
+    fn test_build_request_body() {
+        let body = build_request_body("dGVzdA==");
         assert_eq!(
-            msg["realtimeInput"]["mediaChunks"][0]["mimeType"],
-            "audio/pcm;rate=16000"
+            body["contents"][0]["parts"][1]["inlineData"]["mimeType"],
+            "audio/wav"
         );
+        assert_eq!(
+            body["contents"][0]["parts"][1]["inlineData"]["data"],
+            "dGVzdA=="
+        );
+        assert_eq!(body["generationConfig"]["temperature"], 0.0);
     }
 
     #[test]
-    fn test_parse_text_delta() {
-        let raw = r#"{"serverContent":{"modelTurn":{"parts":[{"text":"hello world"}]}}}"#;
-        match parse_server_message(raw) {
-            ServerEvent::TextDelta(t) => assert_eq!(t, "hello world"),
-            _ => panic!("Expected TextDelta"),
-        }
+    fn test_extract_text_success() {
+        let response = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "ciao mondo"}]
+                },
+                "finishReason": "STOP"
+            }]
+        });
+        let text = extract_text(&response).unwrap();
+        assert_eq!(text, "ciao mondo");
     }
 
     #[test]
-    fn test_parse_turn_complete() {
-        let raw = r#"{"serverContent":{"turnComplete":true}}"#;
-        match parse_server_message(raw) {
-            ServerEvent::TurnComplete => {}
-            _ => panic!("Expected TurnComplete"),
-        }
+    fn test_extract_text_empty() {
+        let response = json!({
+            "candidates": [{
+                "content": {
+                    "parts": []
+                }
+            }]
+        });
+        let text = extract_text(&response).unwrap();
+        assert!(text.is_empty());
     }
 
     #[test]
-    fn test_parse_setup_complete() {
-        let raw = r#"{"setupComplete":{}}"#;
-        match parse_server_message(raw) {
-            ServerEvent::SetupComplete => {}
-            _ => panic!("Expected SetupComplete"),
-        }
+    fn test_extract_text_api_error() {
+        let response = json!({
+            "error": {
+                "message": "API key invalid",
+                "code": 403
+            }
+        });
+        let result = extract_text(&response);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("API key invalid"));
+    }
+
+    #[test]
+    fn test_truncate_str() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+        assert_eq!(truncate_str("hello world", 5), "hello…");
     }
 }
