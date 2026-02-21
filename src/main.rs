@@ -20,11 +20,13 @@ fn print_usage() {
     eprintln!("Usage: g-type [command]");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  (none)      Start the dictation daemon");
-    eprintln!("  setup       Run interactive setup wizard");
-    eprintln!("  set-key     Update your Gemini API key");
-    eprintln!("  config      Show config file location");
-    eprintln!("  help        Show this message");
+    eprintln!("  (none)        Start the dictation daemon");
+    eprintln!("  setup         Run interactive setup wizard");
+    eprintln!("  set-key       Update your Gemini API key");
+    eprintln!("  config        Show config file location");
+    eprintln!("  test-audio    Test microphone capture (3 seconds)");
+    eprintln!("  list-devices  List all audio input devices");
+    eprintln!("  help          Show this message");
     eprintln!();
     eprintln!("Hold your hotkey (default: CTRL+SHIFT+SPACE) to dictate anywhere.");
 }
@@ -72,6 +74,57 @@ async fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
+            return Ok(());
+        }
+        Some("test-audio") => {
+            eprintln!();
+            eprintln!("  \x1b[36m🎤 G-Type Audio Test\x1b[0m");
+            eprintln!();
+            match audio::test_audio_capture(3) {
+                Ok((callbacks, samples, _peak)) => {
+                    eprintln!();
+                    if callbacks == 0 {
+                        eprintln!("  \x1b[31m❌ FAIL: No audio callbacks received!\x1b[0m");
+                        eprintln!("     Your audio device is not sending data.");
+                        eprintln!("     Try: g-type list-devices");
+                    } else if samples == 0 {
+                        eprintln!("  \x1b[31m❌ FAIL: Callbacks fired but no samples!\x1b[0m");
+                    } else {
+                        eprintln!("  \x1b[32m✔ PASS: Audio capture working!\x1b[0m");
+                        eprintln!("    {} callbacks, {} total samples", callbacks, samples);
+                    }
+                    eprintln!();
+                }
+                Err(e) => {
+                    eprintln!("  \x1b[31m❌ Audio test failed: {}\x1b[0m", e);
+                    eprintln!();
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        Some("list-devices") => {
+            eprintln!();
+            eprintln!("  \x1b[36m🔊 Audio Input Devices\x1b[0m");
+            eprintln!();
+            match audio::list_input_devices() {
+                Ok(devices) => {
+                    if devices.is_empty() {
+                        eprintln!("  No audio input devices found!");
+                    } else {
+                        for (name, configs) in &devices {
+                            eprintln!("  • {}", name);
+                            for cfg in configs {
+                                eprintln!("   {}", cfg);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  \x1b[31m❌ Failed to list devices: {}\x1b[0m", e);
+                }
+            }
+            eprintln!();
             return Ok(());
         }
         Some(unknown) => {

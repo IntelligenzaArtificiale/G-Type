@@ -117,8 +117,9 @@ async fn state_idle(input_rx: &mut InputRx, hotkey_label: &str) -> State {
 async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label: &str) -> State {
     info!("State: RECORDING — capturing audio to buffer");
 
-    // Audio capture channel (large buffer so the audio thread never blocks)
-    let (audio_tx, mut audio_rx) = mpsc::channel::<audio::AudioChunk>(512);
+    // Audio capture channel — uses std::sync::mpsc (NOT tokio) because
+    // the cpal audio callback runs on a non-tokio OS thread.
+    let (audio_tx, audio_rx) = audio::audio_channel();
 
     // Atomic flag to control audio capture thread
     let recording_flag = Arc::new(AtomicBool::new(true));
@@ -131,11 +132,12 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         return State::Idle;
     }
 
-    // Spawn a background task that accumulates audio chunks.
-    // It returns the collected samples when the audio channel closes.
-    let collector_handle = tokio::spawn(async move {
+    // Spawn a blocking task that drains the std::sync::mpsc receiver.
+    // This runs on tokio's blocking thread pool so it won't block the async runtime.
+    let collector_handle = tokio::task::spawn_blocking(move || {
         let mut all_samples = Vec::<i16>::new();
-        while let Some(chunk) = audio_rx.recv().await {
+        // recv() blocks until a chunk arrives or all senders are dropped
+        while let Ok(chunk) = audio_rx.recv() {
             all_samples.extend_from_slice(&chunk);
         }
         all_samples
