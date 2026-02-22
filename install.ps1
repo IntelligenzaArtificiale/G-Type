@@ -118,6 +118,7 @@ function Main {
     Write-Host "  Useful commands:" -ForegroundColor Green
     Write-Host "    g-type setup     Re-run setup wizard" -ForegroundColor Green
     Write-Host "    g-type stats     Show cost & usage statistics" -ForegroundColor Green
+    Write-Host "    g-type upgrade   Self-update to latest version" -ForegroundColor Green
     Write-Host "    g-type set-key   Update API key" -ForegroundColor Green
     Write-Host "    g-type config    Show config path" -ForegroundColor Green
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green

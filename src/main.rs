@@ -13,6 +13,7 @@ mod injector;
 mod input;
 mod network;
 mod tracking;
+mod upgrade;
 
 use anyhow::Result;
 use tracing::{debug, error, info};
@@ -27,6 +28,8 @@ fn print_usage() {
     eprintln!("  set-key       Update your Gemini API key");
     eprintln!("  config        Show config file location");
     eprintln!("  stats         Show cost & usage statistics");
+    eprintln!("  upgrade       Self-update to latest release");
+    eprintln!("  version       Show current version");
     eprintln!("  test-audio    Test microphone capture (3 seconds)");
     eprintln!("  list-devices  List all audio input devices");
     eprintln!("  help          Show this message");
@@ -76,6 +79,17 @@ async fn main() -> Result<()> {
                 eprintln!("\n❌ Failed to load stats: {e}\n");
                 std::process::exit(1);
             }
+            return Ok(());
+        }
+        Some("upgrade") | Some("update") => {
+            if let Err(e) = upgrade::run_upgrade() {
+                eprintln!("\n❌ Upgrade failed: {e}\n");
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Some("version") | Some("--version") | Some("-V") => {
+            println!("g-type {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Some("set-key") => {

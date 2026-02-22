@@ -130,6 +130,8 @@ Re-run anytime with `g-type setup`.
 g-type                # Start daemon (auto-setup on first run)
 g-type setup          # Re-run setup wizard
 g-type stats          # Show cost & usage statistics
+g-type upgrade        # Self-update to latest release
+g-type version        # Show current version
 g-type set-key KEY    # Update API key
 g-type config         # Show config file path
 g-type test-audio     # Test microphone (3 seconds)
@@ -172,6 +174,7 @@ src/
 ├── audio_feedback.rs rodio start/stop/error beeps
 ├── network.rs        REST client, reqwest-retry, WAV encoding
 ├── tracking.rs       Cost tracking, usage stats, JSONL storage
+├── upgrade.rs        Self-update from GitHub Releases
 ├── input.rs          rdev global keyboard hook
 ├── injector.rs       enigo keystrokes, arboard clipboard fallback
 └── config.rs         TOML config, dialoguer setup wizard
@@ -184,6 +187,7 @@ Key design choices:
 - **Error injection:** API errors are typed into the focused field so the user sees them.
 - **Audio feedback:** Beeps on record start, stop, and error (via `rodio`).
 - **Cost tracking:** Every transcription is logged with token counts, cost, and time saved. View with `g-type stats`.
+- **Self-update:** `g-type upgrade` fetches the latest release from GitHub and atomically replaces the binary.
 - **Pre-allocated buffers:** Audio buffer pre-sized for ~10s to avoid reallocations.
 - **Interactive hotkey capture:** Press your desired combo during setup — no manual typing.
 - **Graceful shutdown:** Catches SIGINT/SIGTERM for clean exit.
