@@ -223,8 +223,8 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         return State::Idle;
     }
 
-    let transcription = match network::transcribe(config, &all_samples).await {
-        Ok(text) => text,
+    let (transcription, usage) = match network::transcribe(config, &all_samples).await {
+        Ok(result) => result,
         Err(e) => {
             error!(%e, "Transcription failed");
             warn!("Returning to idle due to transcription failure");
@@ -238,6 +238,16 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
     if transcription.is_empty() {
         warn!("Empty transcription received, skipping injection");
         return State::Idle;
+    }
+
+    // Track cost and usage
+    let record = crate::tracking::build_record(&config.model, duration, &usage, &transcription);
+
+    let log_line = crate::tracking::format_log_line(&record, &config.currency);
+    info!("{}", log_line);
+
+    if let Err(e) = crate::tracking::append_record(&record) {
+        warn!(%e, "Failed to save tracking record (non-fatal)");
     }
 
     // Inject the transcribed text

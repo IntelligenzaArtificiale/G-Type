@@ -26,6 +26,8 @@ pub struct Config {
     pub language: String,
     #[serde(default = "default_sound_enabled")]
     pub sound_enabled: bool,
+    #[serde(default = "default_currency")]
+    pub currency: String,
 }
 
 fn default_model() -> String {
@@ -46,6 +48,10 @@ fn default_language() -> String {
 
 fn default_sound_enabled() -> bool {
     true
+}
+
+fn default_currency() -> String {
+    "USD".into()
 }
 
 /// Available languages for transcription.
@@ -203,11 +209,12 @@ pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
     // ── Step 3: Model Selection ────────────────────────────
     let models = vec![
         "models/gemini-2.0-flash",
-        "models/gemini-2.0-flash-lite",
         "models/gemini-2.5-flash",
+        "models/gemini-2.5-flash-lite",
         "models/gemini-2.5-pro",
-        "models/gemini-1.5-pro",
-        "models/gemini-1.5-flash",
+        "models/gemini-3-flash-preview",
+        "models/gemini-3-pro-preview",
+        "models/gemini-3.1-pro-preview",
     ];
 
     let model_idx = Select::with_theme(&theme)
@@ -239,7 +246,20 @@ pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
         .interact()?;
     let sound_enabled = sound_idx == 0;
 
-    // ── Step 6: Hotkey — interactive capture ───────────────
+    // ── Step 6: Currency ───────────────────────────────────
+    let currency_labels: Vec<String> = crate::tracking::CURRENCIES
+        .iter()
+        .map(|(code, sym, _)| format!("{code}  ({sym})"))
+        .collect();
+
+    let currency_idx = Select::with_theme(&theme)
+        .with_prompt("💱 Display currency for cost tracking")
+        .default(0)
+        .items(&currency_labels)
+        .interact()?;
+    let currency = crate::tracking::CURRENCIES[currency_idx].0.to_string();
+
+    // ── Step 7: Hotkey — interactive capture ───────────────
     println!();
     println!(
         "  {} Press your desired hotkey combo (e.g. hold Ctrl+Shift+Space)...",
@@ -262,6 +282,7 @@ pub fn interactive_setup(path: &PathBuf) -> Result<Config> {
         timeout_secs: default_timeout_secs(),
         language,
         sound_enabled,
+        currency,
     };
 
     save(&cfg, path)?;
@@ -532,6 +553,7 @@ pub fn set_api_key(key: &str) -> Result<()> {
             timeout_secs: default_timeout_secs(),
             language: default_language(),
             sound_enabled: default_sound_enabled(),
+            currency: default_currency(),
         }
     };
 
@@ -554,6 +576,7 @@ mod tests {
             timeout_secs: 3,
             language: default_language(),
             sound_enabled: default_sound_enabled(),
+            currency: default_currency(),
         };
         let url = cfg.api_url();
         // API key must NOT appear in the URL (sent via header).
@@ -572,6 +595,7 @@ mod tests {
         assert_eq!(cfg.timeout_secs, 10);
         assert_eq!(cfg.language, "auto");
         assert!(cfg.sound_enabled);
+        assert_eq!(cfg.currency, "USD");
     }
 
     #[test]
@@ -598,6 +622,7 @@ timeout_secs = 30
             timeout_secs: 10,
             language: default_language(),
             sound_enabled: default_sound_enabled(),
+            currency: default_currency(),
         };
         let url = cfg.api_url();
         assert!(!url.contains("SECRET"), "API key must not appear in URL");
@@ -608,13 +633,14 @@ timeout_secs = 30
     fn test_api_url_strips_model_prefix() {
         let cfg = Config {
             api_key: "k".into(),
-            model: "models/gemini-1.5-flash".into(),
+            model: "models/gemini-2.5-flash".into(),
             hotkey: default_hotkey(),
             timeout_secs: 10,
             language: default_language(),
             sound_enabled: default_sound_enabled(),
+            currency: default_currency(),
         };
-        assert!(cfg.api_url().contains("gemini-1.5-flash:generateContent"));
+        assert!(cfg.api_url().contains("gemini-2.5-flash:generateContent"));
     }
 
     #[test]
@@ -626,6 +652,7 @@ timeout_secs = 30
             timeout_secs: 10,
             language: default_language(),
             sound_enabled: default_sound_enabled(),
+            currency: default_currency(),
         };
         assert!(cfg.api_url().contains("gemini-2.0-pro:generateContent"));
     }

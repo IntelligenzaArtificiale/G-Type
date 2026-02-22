@@ -178,6 +178,7 @@ main() {
     echo -e "${GREEN}${NC}"
     echo -e "${GREEN}  Useful commands:${NC}"
     echo -e "${GREEN}    g-type setup     Re-run setup wizard${NC}"
+    echo -e "${GREEN}    g-type stats     Show cost & usage statistics${NC}"
     echo -e "${GREEN}    g-type set-key   Update API key${NC}"
     echo -e "${GREEN}    g-type config    Show config path${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

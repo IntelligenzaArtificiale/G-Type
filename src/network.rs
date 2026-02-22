@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use tracing::{debug, error, warn};
 
 use crate::config::Config;
+use crate::tracking::TokenUsage;
 
 /// HTTP client singleton with retry middleware.
 fn http_client() -> Result<ClientWithMiddleware> {
@@ -33,8 +34,8 @@ fn http_client() -> Result<ClientWithMiddleware> {
 /// - `config`: App config with API key and model.
 /// - `samples`: All recorded PCM i16 16kHz mono samples.
 ///
-/// Returns the transcription text.
-pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
+/// Returns the transcription text and token usage metadata.
+pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<(String, TokenUsage)> {
     if samples.is_empty() {
         bail!("No audio samples to transcribe");
     }
@@ -86,14 +87,19 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
         error!(status = %status, body = %truncate_str(&response_text, 500), "Gemini API error");
 
         // Return a user-friendly error message that will be injected
+        let error_usage = TokenUsage::default();
         if status.as_u16() == 429 {
-            return Ok(
+            return Ok((
                 "[Errore: Troppe richieste (429). Attendi qualche secondo e riprova]".to_string(),
-            );
+                error_usage,
+            ));
         } else if status.as_u16() == 403 {
-            return Ok("[Errore: API Key non valida o permessi insufficienti (403)]".to_string());
+            return Ok((
+                "[Errore: API Key non valida o permessi insufficienti (403)]".to_string(),
+                error_usage,
+            ));
         } else {
-            return Ok(format!("[Errore API Gemini: {}]", status));
+            return Ok((format!("[Errore API Gemini: {}]", status), error_usage));
         }
     }
 
@@ -101,15 +107,20 @@ pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<String> {
     let parsed: Value =
         serde_json::from_str(&response_text).context("Failed to parse Gemini API JSON response")?;
 
+    // Extract token usage from usageMetadata
+    let usage = extract_usage(&parsed);
+
     let transcription = extract_text(&parsed)?;
 
     debug!(
         text_len = transcription.len(),
         text_preview = %truncate_str(&transcription, 80),
+        prompt_tokens = usage.prompt_tokens,
+        output_tokens = usage.candidates_tokens,
         "Transcription received"
     );
 
-    Ok(transcription)
+    Ok((transcription, usage))
 }
 
 /// Build the JSON body for Gemini generateContent with inline audio.
@@ -134,6 +145,28 @@ fn build_request_body(wav_b64: &str, language: &str) -> Value {
             "maxOutputTokens": 4096
         }
     })
+}
+
+/// Extract token usage from the Gemini response's `usageMetadata` field.
+fn extract_usage(response: &Value) -> TokenUsage {
+    if let Some(meta) = response.get("usageMetadata") {
+        TokenUsage {
+            prompt_tokens: meta
+                .get("promptTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            candidates_tokens: meta
+                .get("candidatesTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            total_tokens: meta
+                .get("totalTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+        }
+    } else {
+        TokenUsage::default()
+    }
 }
 
 /// Extract text from Gemini generateContent response.

@@ -12,6 +12,7 @@ mod config;
 mod injector;
 mod input;
 mod network;
+mod tracking;
 
 use anyhow::Result;
 use tracing::{debug, error, info};
@@ -25,6 +26,7 @@ fn print_usage() {
     eprintln!("  setup         Run interactive setup wizard");
     eprintln!("  set-key       Update your Gemini API key");
     eprintln!("  config        Show config file location");
+    eprintln!("  stats         Show cost & usage statistics");
     eprintln!("  test-audio    Test microphone capture (3 seconds)");
     eprintln!("  list-devices  List all audio input devices");
     eprintln!("  help          Show this message");
@@ -57,6 +59,21 @@ async fn main() -> Result<()> {
             let path = config::config_path()?;
             if let Err(e) = config::interactive_setup(&path) {
                 eprintln!("\n❌ Setup failed: {e}\n");
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Some("stats") => {
+            // Load config for currency preference (fallback to USD if no config).
+            let currency = config::config_path()
+                .ok()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|raw| toml::from_str::<config::Config>(&raw).ok())
+                .map(|c| c.currency)
+                .unwrap_or_else(|| "USD".to_string());
+
+            if let Err(e) = tracking::print_stats(&currency) {
+                eprintln!("\n❌ Failed to load stats: {e}\n");
                 std::process::exit(1);
             }
             return Ok(());

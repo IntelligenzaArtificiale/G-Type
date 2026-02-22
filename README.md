@@ -90,11 +90,12 @@ On first launch, G-Type runs an interactive setup wizard:
 
 ? 🤖 Select Gemini Model:
   > models/gemini-2.0-flash
-    models/gemini-2.0-flash-lite
     models/gemini-2.5-flash
+    models/gemini-2.5-flash-lite
     models/gemini-2.5-pro
-    models/gemini-1.5-pro
-    models/gemini-1.5-flash
+    models/gemini-3-flash-preview
+    models/gemini-3-pro-preview
+    models/gemini-3.1-pro-preview
 
 ? 🌍 Transcription Language:
   > Auto-detect  (auto)
@@ -109,6 +110,12 @@ On first launch, G-Type runs an interactive setup wizard:
   > Yes — play beeps on start/stop
     No — silent mode
 
+? 💱 Display currency for cost tracking:
+  > USD  ($)
+    EUR  (€)
+    GBP  (£)
+    ...
+
 ⌨️ Press your desired hotkey combo (e.g. hold Ctrl+Shift+Space)...
   Captured hotkey: ctrl+shift+space
 
@@ -122,6 +129,7 @@ Re-run anytime with `g-type setup`.
 ```bash
 g-type                # Start daemon (auto-setup on first run)
 g-type setup          # Re-run setup wizard
+g-type stats          # Show cost & usage statistics
 g-type set-key KEY    # Update API key
 g-type config         # Show config file path
 g-type test-audio     # Test microphone (3 seconds)
@@ -151,6 +159,7 @@ Config file locations:
 | `hotkey`         | `ctrl+shift+space`        | Trigger key combination        |
 | `language`       | `auto`                    | Transcription language (auto, it, en, es, fr, de, ...) |
 | `sound_enabled`  | `true`                    | Play beeps on record start/stop |
+| `currency`       | `USD`                     | Display currency for cost tracking (USD, EUR, GBP, JPY, INR, BRL, CNY, KRW) |
 | `timeout_secs`   | `10`                      | HTTP request timeout (seconds) |
 
 ## Architecture
@@ -162,6 +171,7 @@ src/
 ├── audio.rs          cpal capture, real-time downsample to 16kHz mono
 ├── audio_feedback.rs rodio start/stop/error beeps
 ├── network.rs        REST client, reqwest-retry, WAV encoding
+├── tracking.rs       Cost tracking, usage stats, JSONL storage
 ├── input.rs          rdev global keyboard hook
 ├── injector.rs       enigo keystrokes, arboard clipboard fallback
 └── config.rs         TOML config, dialoguer setup wizard
@@ -173,6 +183,7 @@ Key design choices:
 - **Auto-retry:** Exponential backoff on transient HTTP errors (429, 503).
 - **Error injection:** API errors are typed into the focused field so the user sees them.
 - **Audio feedback:** Beeps on record start, stop, and error (via `rodio`).
+- **Cost tracking:** Every transcription is logged with token counts, cost, and time saved. View with `g-type stats`.
 - **Pre-allocated buffers:** Audio buffer pre-sized for ~10s to avoid reallocations.
 - **Interactive hotkey capture:** Press your desired combo during setup — no manual typing.
 - **Graceful shutdown:** Catches SIGINT/SIGTERM for clean exit.
