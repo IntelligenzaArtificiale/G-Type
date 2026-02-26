@@ -90,7 +90,48 @@ check_path() {
         echo ""
         echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
         echo ""
+        return 1
     fi
+
+    return 0
+}
+
+# Persist PATH update in common shell profile files when missing
+persist_path_update() {
+    local export_line='export PATH="$HOME/.local/bin:$PATH"'
+    local shell_name profile=""
+
+    shell_name="$(basename "${SHELL:-}")"
+    case "$shell_name" in
+        zsh)
+            profile="${HOME}/.zshrc"
+            ;;
+        bash)
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                profile="${HOME}/.bash_profile"
+            else
+                profile="${HOME}/.bashrc"
+            fi
+            ;;
+        *)
+            # Fallback for uncommon shells
+            profile="${HOME}/.profile"
+            ;;
+    esac
+
+    if [[ -f "$profile" ]] && grep -Fq "$export_line" "$profile"; then
+        ok "PATH export already present in ${profile}"
+        return
+    fi
+
+    {
+        echo ""
+        echo "# Added by G-Type installer"
+        echo "$export_line"
+    } >> "$profile"
+
+    ok "Added ${INSTALL_DIR} to PATH in ${profile}"
+    info "Open a new terminal (or run: source ${profile}) before using '${BIN_NAME}'."
 }
 
 # Create config file if it doesn't exist — delegates to the binary's built-in wizard
@@ -167,7 +208,9 @@ main() {
     info "Latest version: ${version}"
 
     download_binary "$version" "$platform"
-    check_path
+    if ! check_path; then
+        persist_path_update
+    fi
     setup_config
 
     echo ""
