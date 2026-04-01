@@ -51,9 +51,18 @@ arboard = "3.6.1"
 rodio = "0.20.1"
 reqwest-retry = "0.8"
 reqwest-middleware = { version = "0.4", features = ["json"] }
-dialoguer = "0.12.0"
-indicatif = "0.17"
 colored = "2"
+tungstenite = "0.29.0"
+open = "5.3.3"
+portpicker = "0.1.1"
+axum = "0.8.8"
+tower-http = { version = "0.6.8", features = ["cors"] }
+rand = "0.10.0"
+uuid = "1.23.0"
+tray-icon = "0.19"
+muda = "0.15"
+wry = "0.46"
+winit = "0.30"
 
 [profile.release]
 opt-level = 3
