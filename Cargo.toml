@@ -63,6 +63,7 @@ tray-icon = "0.19"
 muda = "0.15"
 wry = "0.46"
 winit = "0.30"
+gtk = "0.18"
 
 [profile.release]
 opt-level = 3

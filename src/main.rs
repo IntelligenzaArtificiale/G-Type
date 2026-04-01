@@ -251,6 +251,11 @@ fn main() -> Result<()> {
     // -> OS Thread: winit event loop (required for GUI components like UI floating pill)
     // -> Spawned Thread: tokio background runtime (Settings API, audio logic, hotkeys)
 
+    #[cfg(target_os = "linux")]
+    if let Err(e) = gtk::init() {
+        warn!("Failed to initialize GTK: {:?}", e);
+    }
+
     // Set up cross-thread communication for Winit <-> Tokio
     let (ui_tx, ui_rx) = std::sync::mpsc::channel::<ui_bridge::UiCommand>();
 
