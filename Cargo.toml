@@ -54,6 +54,7 @@ reqwest-middleware = { version = "0.4", features = ["json"] }
 colored = "2"
 tungstenite = "0.29.0"
 open = "5.3.3"
+socket2 = "0.5"
 portpicker = "0.1.1"
 axum = "0.8.8"
 tower-http = { version = "0.6.8", features = ["cors"] }

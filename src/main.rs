@@ -218,14 +218,52 @@ fn main() -> Result<()> {
 
     let cfg_shared = std::sync::Arc::new(tokio::sync::RwLock::new(cfg.clone()));
 
-    // Try to bind the port. If it fails, another instance is already running.
+    // Singleton check: try to bind the port.
+    // If binding fails, the port is held by another process — but we must verify
+    // it is actually RESPONSIVE (not a zombie/stopped process holding a dead socket).
+    // A stopped process can hold a TCP socket open but never reply to HTTP requests.
     let listener = match rt.block_on(tokio::net::TcpListener::bind("127.0.0.1:9741")) {
         Ok(l) => l,
-        Err(_e) => {
-            eprintln!("\n❌ G-Type è già in esecuzione in background!");
-            eprintln!("💡 Controlla l'icona nella barra delle applicazioni (vicino all'orologio).");
-            eprintln!("   Per configurare G-Type vai su: http://127.0.0.1:9741/\n");
-            std::process::exit(1);
+        Err(_) => {
+            // Port is taken. Probe with a real HTTP GET to confirm liveness.
+            let alive = rt.block_on(async {
+                use tokio::io::AsyncWriteExt;
+                let mut stream = match tokio::net::TcpStream::connect("127.0.0.1:9741").await {
+                    Ok(s) => s,
+                    Err(_) => return false,
+                };
+                let _ = stream.write_all(b"GET /api/state HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n").await;
+                // Give it 1 second to send back at least 1 byte.
+                let mut buf = [0u8; 1];
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+                ).await {
+                    Ok(Ok(n)) => n > 0,
+                    _ => false,
+                }
+            });
+
+            if alive {
+                eprintln!("\n❌ G-Type è già in esecuzione in background!");
+                eprintln!("💡 Controlla l'icona nella barra delle applicazioni (vicino all'orologio).");
+                eprintln!("   Per configurare G-Type vai su: http://127.0.0.1:9741/\n");
+                std::process::exit(1);
+            }
+
+            // Port is held by a dead/stopped process. Force-reclaim it with SO_REUSEADDR.
+            warn!("Port 9741 held by an unresponsive process — reclaiming with SO_REUSEADDR.");
+            let sock = socket2::Socket::new(
+                socket2::Domain::IPV4,
+                socket2::Type::STREAM,
+                None,
+            )?;
+            sock.set_reuse_address(true)?;
+            sock.bind(&"127.0.0.1:9741".parse::<std::net::SocketAddr>()?.into())?;
+            sock.listen(128)?;
+            sock.set_nonblocking(true)?;
+            let std_listener: std::net::TcpListener = sock.into();
+            tokio::net::TcpListener::from_std(std_listener)?
         }
     };
 
