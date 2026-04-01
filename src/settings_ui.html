@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="it" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G-Type | Settings</title>
+    <!-- Tailwind CSS (Play CDN for Antirex zero-build flow) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: {
+                            950: '#0a0a0a',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Chart.js for stats -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-950 text-gray-200 font-sans antialiased min-h-screen flex flex-col items-center">
+    <div class="w-full max-w-4xl mx-auto p-8 mt-10">
+        
+        <header class="flex justify-between items-center mb-12 border-b border-gray-800 pb-6">
+            <div>
+                <h1 class="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">G-Type V2</h1>
+                <p class="text-sm text-gray-500 mt-2 tracking-widest uppercase">The Antirex Dictation Daemon</p>
+            </div>
+            
+            <div class="flex items-center space-x-6 text-center">
+                <div>
+                    <p class="text-3xl font-mono text-emerald-400" id="stat-money">$0.00</p>
+                    <p class="text-xs text-gray-500 uppercase tracking-widest">Risparmiati</p>
+                </div>
+                <div class="w-px h-10 bg-gray-800"></div>
+                <div>
+                    <p class="text-3xl font-mono text-blue-400" id="stat-time">0h</p>
+                    <p class="text-xs text-gray-500 uppercase tracking-widest">Ore Guadagnate</p>
+                </div>
+            </div>
+        </header>
+
+        <main class="grid grid-cols-1 md:grid-cols-[1fr_2fr] gap-8">
+            <!-- Sidebar: Config Actions -->
+            <aside class="space-y-6">
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl">
+                    <h3 class="text-lg font-semibold text-white mb-4">Profilo Attivo</h3>
+                    <select id="active-profile" class="w-full bg-gray-950 border border-gray-700 text-sm text-white rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors">
+                        <option>Caricamento...</option>
+                    </select>
+                </div>
+
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl">
+                    <h3 class="text-lg font-semibold text-white mb-4">Modifica Veloce</h3>
+                    <p class="text-sm text-gray-400 mb-4">La UI completa di edit profili arriverà, per ora apre il file TOML.</p>
+                    <button onclick="openToml()" class="w-full py-2 px-4 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700 transition font-medium">
+                        Apri config.toml a mano
+                    </button>
+                    <p class="text-xs text-gray-600 mt-3 text-center">G-Type rilegge il TOML on-the-fly senza restart.</p>
+                </div>
+            </aside>
+
+            <!-- Main: Chart & Stats -->
+            <section class="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl">
+                <h3 class="text-lg font-semibold text-white mb-6">Utilizzo API</h3>
+                <div class="w-full h-64">
+                    <canvas id="usageChart"></canvas>
+                </div>
+            </section>
+        </main>
+        
+        <footer class="mt-20 text-center text-gray-600 text-sm border-t border-gray-900 pt-8">
+            Daemon in ascolto. Premi il tuo hotkey per parlare.
+        </footer>
+    </div>
+
+    <script>
+        // Init chart
+        const ctx = document.getElementById('usageChart').getContext('2d');
+        const usageChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'],
+                datasets: [{
+                    label: 'Tokens Generati',
+                    data: [0, 0, 0, 0, 0, 0, 0],
+                    borderColor: '#60a5fa',
+                    backgroundColor: 'rgba(96, 165, 250, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    x: { grid: { color: '#262626' }, ticks: { color: '#525252' } },
+                    y: { grid: { color: '#262626' }, ticks: { color: '#525252' } }
+                }
+            }
+        });
+
+        // Fetch data
+        async function fetchState() {
+            try {
+                const res = await fetch('/api/state');
+                const state = await res.json();
+                
+                // Update money & time stub (Assuming standard 30wpm typing vs STT)
+                document.getElementById('stat-money').innerText = `$0.00`;
+                document.getElementById('stat-time').innerText = `0.0h`;
+
+                // Update profiles
+                const select = document.getElementById('active-profile');
+                select.innerHTML = '';
+                for (const p of state.config.profiles || []) {
+                    const opt = document.createElement('option');
+                    opt.value = p.name;
+                    opt.text = `${p.name} - [${p.hotkeys.join(' + ')}]`;
+                    select.appendChild(opt);
+                }
+            } catch (e) {
+                console.error("Errore fetch state:", e);
+            }
+        }
+        
+        async function openToml() {
+            await fetch('/api/open_config', { method: 'POST' });
+        }
+
+        fetchState();
+    </script>
+</body>
+</html>

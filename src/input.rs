@@ -6,16 +6,16 @@ use anyhow::{Context, Result};
 use rdev::{Event, EventType, Key};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 /// Signals sent from the input thread to the main event loop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputSignal {
-    /// Hotkey pressed — start recording.
-    Start,
+    /// Hotkey pressed — start recording. Carries the profile name.
+    Start(String),
     /// Hotkey released — stop recording.
     Stop,
 }
@@ -35,7 +35,8 @@ pub struct Hotkey {
     pub modifiers: HashSet<Modifier>,
     /// The main trigger key (the non-modifier key in the combo).
     pub trigger: Key,
-    /// Human-readable label for log messages.
+    /// Human-readable label (stored but currently unused, intentionally kept for debugging).
+    #[allow(dead_code)]
     pub label: String,
 }
 
@@ -46,6 +47,34 @@ pub enum Modifier {
     Shift,
     Alt,
     Meta, // Super/Win/Cmd
+}
+
+/// Shared hotkey configuration that can be updated at runtime.
+/// The listener thread reads this on every keyboard event.
+pub struct SharedHotkeys {
+    profiles: RwLock<Vec<(Hotkey, String)>>,
+}
+
+impl SharedHotkeys {
+    pub fn new(profiles: Vec<(Hotkey, String)>) -> Arc<Self> {
+        Arc::new(Self {
+            profiles: RwLock::new(profiles),
+        })
+    }
+
+    /// Update hotkeys at runtime (called when config changes).
+    /// The listener thread will pick up the change on the next keyboard event.
+    #[allow(dead_code)]
+    pub fn update(&self, new_profiles: Vec<(Hotkey, String)>) {
+        let mut lock = self.profiles.write().expect("SharedHotkeys write lock poisoned");
+        *lock = new_profiles;
+        tracing::info!(count = lock.len(), "Hotkey profiles updated");
+    }
+
+    /// Read current profiles (called by listener on every event).
+    pub fn read(&self) -> std::sync::RwLockReadGuard<'_, Vec<(Hotkey, String)>> {
+        self.profiles.read().expect("SharedHotkeys read lock poisoned")
+    }
 }
 
 /// Parse a hotkey string like "ctrl+shift+space" into a Hotkey struct.
@@ -193,26 +222,29 @@ fn str_to_rdev_key(name: &str) -> Result<Key> {
 struct HookState {
     /// Currently held modifier keys.
     held_modifiers: HashSet<Modifier>,
-    /// Whether the trigger key is currently held.
-    trigger_held: bool,
+    /// Currently held non-modifier keys (track ALL, not just one trigger).
+    held_triggers: HashSet<Key>,
     /// Whether we are currently recording.
     recording: bool,
+    /// Which profile is currently active (if recording).
+    active_profile: Option<String>,
     /// Last trigger time for debouncing.
     last_trigger: Instant,
-    /// The hotkey definition.
-    hotkey: Hotkey,
+    /// Shared hotkey profiles (read on every event).
+    shared_hotkeys: Arc<SharedHotkeys>,
     /// Channel sender.
     tx: InputTx,
 }
 
 impl HookState {
-    fn new(tx: InputTx, hotkey: Hotkey) -> Self {
+    fn new(tx: InputTx, shared_hotkeys: Arc<SharedHotkeys>) -> Self {
         Self {
             held_modifiers: HashSet::new(),
-            trigger_held: false,
+            held_triggers: HashSet::new(),
             recording: false,
+            active_profile: None,
             last_trigger: Instant::now() - std::time::Duration::from_secs(10),
-            hotkey,
+            shared_hotkeys,
             tx,
         }
     }
@@ -222,18 +254,16 @@ impl HookState {
             EventType::KeyPress(key) => {
                 if let Some(m) = key_to_modifier(key) {
                     self.held_modifiers.insert(m);
-                }
-                if key == self.hotkey.trigger {
-                    self.trigger_held = true;
+                } else {
+                    self.held_triggers.insert(key);
                 }
                 self.check_combo();
             }
             EventType::KeyRelease(key) => {
                 if let Some(m) = key_to_modifier(key) {
                     self.held_modifiers.remove(&m);
-                }
-                if key == self.hotkey.trigger {
-                    self.trigger_held = false;
+                } else {
+                    self.held_triggers.remove(&key);
                 }
                 self.check_release();
             }
@@ -242,41 +272,75 @@ impl HookState {
     }
 
     fn check_combo(&mut self) {
-        // All required modifiers must be held AND the trigger key
-        let all_mods = self
-            .hotkey
-            .modifiers
-            .iter()
-            .all(|m| self.held_modifiers.contains(m));
-        if all_mods && self.trigger_held && !self.recording {
+        if self.recording {
+            return; // Already recording, ignore new combos
+        }
+
+        let profiles = self.shared_hotkeys.read();
+        
+        // Find the first matching profile
+        // Priority: more modifiers = higher priority (prevents false matches)
+        let mut best_match: Option<&(Hotkey, String)> = None;
+        let mut best_mod_count = 0;
+
+        for profile in profiles.iter() {
+            let (hotkey, _) = profile;
+            let all_mods = hotkey.modifiers.iter()
+                .all(|m| self.held_modifiers.contains(m));
+            let trigger_held = self.held_triggers.contains(&hotkey.trigger);
+            
+            if all_mods && trigger_held {
+                let mod_count = hotkey.modifiers.len();
+                if mod_count > best_mod_count || best_match.is_none() {
+                    best_match = Some(profile);
+                    best_mod_count = mod_count;
+                }
+            }
+        }
+
+        if let Some((_hotkey, profile_name)) = best_match {
             let now = Instant::now();
             if now.duration_since(self.last_trigger).as_millis() < DEBOUNCE_MS as u128 {
-                debug!(hotkey = %self.hotkey.label, "Hotkey debounced");
                 return;
             }
             self.last_trigger = now;
             self.recording = true;
-            info!(hotkey = %self.hotkey.label, "Hotkey pressed — START recording");
-            if self.tx.blocking_send(InputSignal::Start).is_err() {
+            self.active_profile = Some(profile_name.clone());
+            info!(profile = %profile_name, "Hotkey pressed — START recording");
+            if self.tx.blocking_send(InputSignal::Start(profile_name.clone())).is_err() {
                 error!("Input channel closed, cannot send Start signal");
             }
         }
     }
 
     fn check_release(&mut self) {
-        if self.recording {
-            // Stop when trigger is released OR any required modifier is released
-            let all_mods = self
-                .hotkey
-                .modifiers
-                .iter()
-                .all(|m| self.held_modifiers.contains(m));
-            if !self.trigger_held || !all_mods {
-                self.recording = false;
-                debug!(hotkey = %self.hotkey.label, "Hotkey released");
-                if self.tx.blocking_send(InputSignal::Stop).is_err() {
-                    error!("Input channel closed, cannot send Stop signal");
+        if !self.recording {
+            return;
+        }
+
+        // Stop when the active profile's hotkey is no longer fully held
+        if let Some(ref profile_name) = self.active_profile {
+            let profiles = self.shared_hotkeys.read();
+            if let Some((hotkey, _)) = profiles.iter()
+                .find(|(_, name)| name == profile_name)
+            {
+                let all_mods = hotkey.modifiers.iter()
+                    .all(|m| self.held_modifiers.contains(m));
+                let trigger_held = self.held_triggers.contains(&hotkey.trigger);
+                
+                if !trigger_held || !all_mods {
+                    self.recording = false;
+                    self.active_profile = None;
+                    debug!("Hotkey released — STOP");
+                    if self.tx.blocking_send(InputSignal::Stop).is_err() {
+                        error!("Input channel closed, cannot send Stop signal");
+                    }
                 }
+            } else {
+                // Profile was removed while recording — stop
+                self.recording = false;
+                self.active_profile = None;
+                let _ = self.tx.blocking_send(InputSignal::Stop);
             }
         }
     }
@@ -299,18 +363,37 @@ fn key_to_modifier(key: Key) -> Option<Modifier> {
 /// or the process exits.
 ///
 /// `tx` — channel for sending Start/Stop signals to the async event loop.
-/// `hotkey` — the parsed hotkey combo to listen for.
+/// `shared_hotkeys` — the parsed hotkey combos to listen for.
 pub fn spawn_listener(
     tx: InputTx,
     shutdown: Arc<AtomicBool>,
-    hotkey: Hotkey,
+    shared_hotkeys: Arc<SharedHotkeys>,
 ) -> Result<std::thread::JoinHandle<()>> {
-    let label = hotkey.label.clone();
+    if cfg!(target_os = "linux") && is_wayland() {
+        spawn_evdev_listener(tx, shutdown, shared_hotkeys)
+    } else {
+        spawn_rdev_listener(tx, shutdown, shared_hotkeys)
+    }
+}
+
+/// Detect if running on Wayland
+pub fn is_wayland() -> bool {
+    std::env::var("XDG_SESSION_TYPE")
+        .map(|v| v.eq_ignore_ascii_case("wayland"))
+        .unwrap_or(false)
+}
+
+/// rdev-based listener (X11, macOS, Windows)
+fn spawn_rdev_listener(
+    tx: InputTx,
+    shutdown: Arc<AtomicBool>,
+    shared_hotkeys: Arc<SharedHotkeys>,
+) -> Result<std::thread::JoinHandle<()>> {
     let handle = std::thread::Builder::new()
         .name("g-type-input".into())
         .spawn(move || {
-            debug!(hotkey = %label, "Global keyboard listener started");
-            let state = Arc::new(std::sync::Mutex::new(HookState::new(tx, hotkey)));
+            debug!("Global keyboard listener started");
+            let state = Arc::new(std::sync::Mutex::new(HookState::new(tx, shared_hotkeys)));
 
             let callback = move |event: Event| {
                 if shutdown.load(Ordering::Relaxed) {
@@ -328,6 +411,58 @@ pub fn spawn_listener(
         .context("Failed to spawn input listener thread")?;
 
     Ok(handle)
+}
+
+/// evdev-based listener (Wayland Linux)
+/// Requires user in 'input' group: sudo usermod -aG input $USER
+#[cfg(target_os = "linux")]
+fn spawn_evdev_listener(
+    _tx: InputTx,
+    _shutdown: Arc<AtomicBool>,
+    _shared_hotkeys: Arc<SharedHotkeys>,
+) -> Result<std::thread::JoinHandle<()>> {
+    // Placeholder for actual evdev implementation
+    let handle = std::thread::Builder::new()
+        .name("g-type-input-evdev".into())
+        .spawn(move || {
+            let devices = find_keyboard_devices();
+            if devices.is_empty() {
+                error!("No keyboard devices found. Is user in 'input' group?");
+                return;
+            }
+
+            info!(devices = devices.len(), "evdev keyboard listener placeholder started (Wayland)");
+            
+            // TODO: implement actual evdev listening
+            std::thread::sleep(std::time::Duration::from_secs(u64::MAX));
+        })
+        .context("Failed to spawn evdev listener thread")?;
+        
+    Ok(handle)
+}
+
+#[cfg(target_os = "linux")]
+fn find_keyboard_devices() -> Vec<std::path::PathBuf> {
+    let mut keyboards = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/dev/input/") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("event") {
+                    let cap_path = format!("/sys/class/input/{}/device/capabilities/ev", name);
+                    if let Ok(caps) = std::fs::read_to_string(&cap_path) {
+                        let caps = caps.trim();
+                        if let Ok(val) = u64::from_str_radix(caps, 16) {
+                            if val & (1 << 1) != 0 { // EV_KEY bit
+                                keyboards.push(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    keyboards
 }
 
 #[cfg(test)]

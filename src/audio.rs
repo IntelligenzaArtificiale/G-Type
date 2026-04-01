@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, error, warn};
 
+
 /// Suppress noisy ALSA/JACK/OSS error messages printed to stderr during device enumeration.
 /// These are harmless warnings from ALSA probing devices that don't exist (JACK, OSS, etc.).
 /// We redirect file descriptor 2 (stderr) to /dev/null for the duration of enumeration.
@@ -385,10 +386,23 @@ pub fn audio_channel() -> (AudioTx, AudioRx) {
 }
 
 /// Start audio capture on a dedicated OS thread.
-/// Returns immediately. Audio chunks flow through `tx` (std::sync::mpsc).
+/// Returns a JoinHandle so the caller can wait for clean termination.
+/// Audio chunks flow through `tx` (std::sync::mpsc).
 /// Set `running` to false to stop capture.
-pub fn start_capture(tx: AudioTx, running: Arc<AtomicBool>) -> Result<()> {
-    let device = default_input_device()?;
+pub fn start_capture(tx: AudioTx, running: Arc<AtomicBool>, device_name: Option<String>) -> Result<std::thread::JoinHandle<()>> {
+    let device = if let Some(ref name) = device_name {
+        if name.is_empty() || name == "default" {
+            default_input_device()?
+        } else {
+            let host = cpal::default_host();
+            let mut devices = host.input_devices().context("Failed to enumerate audio input devices")?;
+            devices.find(|d| d.name().unwrap_or_default() == *name)
+                .ok_or_else(|| anyhow::anyhow!("Audio device not found: {}", name))?
+        }
+    } else {
+        default_input_device()?
+    };
+
     let (config, sample_format) = pick_input_config(&device)?;
 
     let source_rate = config.sample_rate.0;
@@ -413,7 +427,7 @@ pub fn start_capture(tx: AudioTx, running: Arc<AtomicBool>) -> Result<()> {
     let c_sent = chunks_sent.clone();
     let s_err = send_errors.clone();
 
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let downsampler = Arc::new(std::sync::Mutex::new(Downsampler::new(
             source_rate,
             source_channels,
@@ -579,7 +593,7 @@ pub fn start_capture(tx: AudioTx, running: Arc<AtomicBool>) -> Result<()> {
         }
     });
 
-    Ok(())
+    Ok(handle)
 }
 
 /// List all available audio input devices.

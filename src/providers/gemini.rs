@@ -11,8 +11,18 @@ use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde_json::{json, Value};
 use tracing::{debug, error, warn};
 
-use crate::config::Config;
 use crate::tracking::TokenUsage;
+
+pub struct GeminiProvider {
+    pub api_key: String,
+    pub model: String,
+}
+
+impl GeminiProvider {
+    pub fn new(api_key: String, model: String) -> Self {
+        Self { api_key, model }
+    }
+}
 
 /// HTTP client singleton with retry middleware.
 fn http_client() -> Result<ClientWithMiddleware> {
@@ -29,98 +39,97 @@ fn http_client() -> Result<ClientWithMiddleware> {
         .build())
 }
 
-/// Transcribe audio samples using Gemini REST API.
-///
-/// - `config`: App config with API key and model.
-/// - `samples`: All recorded PCM i16 16kHz mono samples.
-///
-/// Returns the transcription text and token usage metadata.
-pub async fn transcribe(config: &Config, samples: &[i16]) -> Result<(String, TokenUsage)> {
-    if samples.is_empty() {
-        bail!("No audio samples to transcribe");
-    }
-
-    let duration_secs = samples.len() as f64 / 16_000.0;
-    debug!(
-        samples = samples.len(),
-        duration_secs = format!("{:.1}", duration_secs),
-        "Sending audio to Gemini API"
-    );
-
-    // Step 1: Encode PCM samples as WAV in memory
-    let wav_bytes = encode_wav(samples);
-    let wav_b64 = BASE64.encode(&wav_bytes);
-
-    debug!(
-        wav_size = wav_bytes.len(),
-        b64_size = wav_b64.len(),
-        "Audio encoded as WAV"
-    );
-
-    // Step 2: Build the API request
-    let url = config.api_url();
-    let body = build_request_body(&wav_b64, &config.language);
-
-    debug!(model = %config.model, "Sending request to Gemini API");
-
-    // Step 3: Send HTTP POST (with auto-retry for 429/503)
-    // API key is sent via header, never in URL (security best practice).
-    let client = http_client()?;
-    let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .header("x-goog-api-key", &config.api_key)
-        .json(&body)
-        .send()
-        .await
-        .context("HTTP request to Gemini API failed")?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .context("Failed to read API response body")?;
-
-    debug!(status = %status, body_len = response_text.len(), "API response received");
-
-    if !status.is_success() {
-        error!(status = %status, body = %truncate_str(&response_text, 500), "Gemini API error");
-
-        // Return a user-friendly error message that will be injected
-        let error_usage = TokenUsage::default();
-        if status.as_u16() == 429 {
-            return Ok((
-                "[Errore: Troppe richieste (429). Attendi qualche secondo e riprova]".to_string(),
-                error_usage,
-            ));
-        } else if status.as_u16() == 403 {
-            return Ok((
-                "[Errore: API Key non valida o permessi insufficienti (403)]".to_string(),
-                error_usage,
-            ));
-        } else {
-            return Ok((format!("[Errore API Gemini: {}]", status), error_usage));
+impl GeminiProvider {
+    pub async fn transcribe(&self, samples: &[i16], language: &str) -> Result<(String, TokenUsage)> {
+        if samples.is_empty() {
+            bail!("No audio samples to transcribe");
         }
+
+        let duration_secs = samples.len() as f64 / 16_000.0;
+        debug!(
+            samples = samples.len(),
+            duration_secs = format!("{:.1}", duration_secs),
+            "Sending audio to Gemini API"
+        );
+
+        // Step 1: Encode PCM samples as WAV in memory
+        let wav_bytes = encode_wav(samples);
+        let wav_b64 = BASE64.encode(&wav_bytes);
+
+        debug!(
+            wav_size = wav_bytes.len(),
+            b64_size = wav_b64.len(),
+            "Audio encoded as WAV"
+        );
+
+        // Step 2: Build the API request
+        let model_name = self.model.strip_prefix("models/").unwrap_or(&self.model);
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            model_name
+        );
+        let body = build_request_body(&wav_b64, language);
+
+        debug!(model = %self.model, "Sending request to Gemini API");
+
+        // Step 3: Send HTTP POST (with auto-retry for 429/503)
+        // API key is sent via header, never in URL (security best practice).
+        let client = http_client()?;
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("x-goog-api-key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .context("HTTP request to Gemini API failed")?;
+
+        let status = response.status();
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read API response body")?;
+
+        debug!(status = %status, body_len = response_text.len(), "API response received");
+
+        if !status.is_success() {
+            error!(status = %status, body = %truncate_str(&response_text, 500), "Gemini API error");
+            // Return a user-friendly error message that will be injected
+            let error_usage = TokenUsage::default();
+            if status.as_u16() == 429 {
+                return Ok((
+                    "[Errore: Troppe richieste (429). Attendi qualche secondo e riprova]".to_string(),
+                    error_usage,
+                ));
+            } else if status.as_u16() == 403 {
+                return Ok((
+                    "[Errore: API Key non valida o permessi insufficienti (403)]".to_string(),
+                    error_usage,
+                ));
+            } else {
+                return Ok((format!("[Errore API Gemini: {}]", status), error_usage));
+            }
+        }
+
+        // Step 4: Parse the response
+        let parsed: Value =
+            serde_json::from_str(&response_text).context("Failed to parse Gemini API JSON response")?;
+
+        // Extract token usage from usageMetadata
+        let usage = extract_usage(&parsed);
+
+        let transcription = extract_text(&parsed)?;
+
+        debug!(
+            text_len = transcription.len(),
+            text_preview = %truncate_str(&transcription, 80),
+            prompt_tokens = usage.prompt_tokens,
+            output_tokens = usage.candidates_tokens,
+            "Transcription received"
+        );
+
+        Ok((transcription, usage))
     }
-
-    // Step 4: Parse the response
-    let parsed: Value =
-        serde_json::from_str(&response_text).context("Failed to parse Gemini API JSON response")?;
-
-    // Extract token usage from usageMetadata
-    let usage = extract_usage(&parsed);
-
-    let transcription = extract_text(&parsed)?;
-
-    debug!(
-        text_len = transcription.len(),
-        text_preview = %truncate_str(&transcription, 80),
-        prompt_tokens = usage.prompt_tokens,
-        output_tokens = usage.candidates_tokens,
-        "Transcription received"
-    );
-
-    Ok((transcription, usage))
 }
 
 /// Build the JSON body for Gemini generateContent with inline audio.
@@ -140,7 +149,7 @@ fn build_request_body(wav_b64: &str, language: &str) -> Value {
                 }
             ]
         }],
-        "generationConfig": {
+        "generationConfigV2": {
             "temperature": 0.0,
             "maxOutputTokens": 4096
         }
@@ -301,7 +310,7 @@ mod tests {
             body["contents"][0]["parts"][1]["inlineData"]["data"],
             "dGVzdA=="
         );
-        assert_eq!(body["generationConfig"]["temperature"], 0.0);
+        assert_eq!(body["generationConfigV2"]["temperature"], 0.0);
     }
 
     #[test]

@@ -7,37 +7,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+use winit::event_loop::EventLoopProxy;
+use crate::ui_bridge::{DaemonEvent, DaemonState, ProfileInfo, UiCommand};
 
 use crate::audio;
-use crate::config::Config;
+use crate::config::{ConfigV2, Profile};
 use crate::injector;
 use crate::input::{self, InputRx, InputSignal, InputTx};
-use crate::network;
+use crate::providers;
+use crate::transforms;
 
 /// FSM states for the daemon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-enum State {
-    /// Waiting for CTRL+T. Minimal resource usage.
-    Idle,
-    /// Microphone active, streaming audio to Gemini.
-    Recording,
-    /// Audio stopped, waiting for final transcription from API.
-    Processing,
-    /// Injecting transcribed text into the focused application.
-    Injecting,
-}
-
-impl std::fmt::Display for State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            State::Idle => write!(f, "IDLE"),
-            State::Recording => write!(f, "RECORDING"),
-            State::Processing => write!(f, "PROCESSING"),
-            State::Injecting => write!(f, "INJECTING"),
-        }
-    }
-}
 
 /// Run the main event loop.
 ///
@@ -46,19 +26,28 @@ impl std::fmt::Display for State {
 /// - Audio capture
 /// - Network (WebSocket to Gemini)
 /// - Text injection
-pub async fn run(config: Config) -> Result<()> {
+pub async fn run_with_ui(
+    config: ConfigV2,
+    ui_proxy: EventLoopProxy<DaemonEvent>,
+    mut ui_rx: std::sync::mpsc::Receiver<UiCommand>
+) -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
 
-    // Parse the configured hotkey
-    let hotkey = input::parse_hotkey(&config.hotkey).context("Invalid hotkey in config")?;
-    let hotkey_label = hotkey.label.clone();
+    // Build shared hotkeys from all profiles
+    let hotkey_profiles: Vec<(input::Hotkey, String)> = config.profiles.iter()
+        .filter_map(|p| {
+            input::parse_hotkey(&p.hotkey).ok().map(|hk| (hk, p.name.clone()))
+        })
+        .collect();
+
+    let shared_hotkeys = input::SharedHotkeys::new(hotkey_profiles);
 
     // Channel for keyboard input signals (Start/Stop)
     let (input_tx, mut input_rx): (InputTx, InputRx) = mpsc::channel(32);
 
     // Spawn the global keyboard listener on a dedicated OS thread
     let shutdown_clone = shutdown.clone();
-    let _input_handle = crate::input::spawn_listener(input_tx, shutdown_clone, hotkey)
+    let _input_handle = crate::input::spawn_listener(input_tx, shutdown_clone, shared_hotkeys.clone())
         .context("Failed to spawn keyboard listener")?;
 
     // Register SIGINT/SIGTERM handler for graceful shutdown
@@ -85,9 +74,10 @@ pub async fn run(config: Config) -> Result<()> {
         shutdown_sig.store(true, Ordering::SeqCst);
     });
 
-    info!(hotkey = %hotkey_label, "Ready — hold hotkey to dictate.");
-
-    let mut state = State::Idle;
+    info!(profiles = config.profiles.len(), "Ready — hold hotkey to dictate.");
+    
+    // Initial UI state
+    let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -95,49 +85,63 @@ pub async fn run(config: Config) -> Result<()> {
             return Ok(());
         }
 
-        match state {
-            State::Idle => {
-                state = state_idle(&mut input_rx, &hotkey_label, &config).await;
-            }
-            State::Recording => {
-                state = state_recording(&config, &mut input_rx, &hotkey_label).await;
-            }
-            State::Processing => {
-                // Processing is handled inline within state_recording
-                // This state exists for completeness but transitions happen
-                // within the recording flow
-                unreachable!("Processing state handled within recording flow");
-            }
-            State::Injecting => {
-                // Injecting is also handled inline
-                unreachable!("Injecting state handled within recording flow");
+        // Drain UI commands (non-blocking)
+        while let Ok(cmd) = ui_rx.try_recv() {
+            match cmd {
+                UiCommand::Quit => {
+                    shutdown.store(true, Ordering::SeqCst);
+                }
+                UiCommand::OpenSettings => {
+                    // Open settings UI
+                    if let Err(e) = open::that("http://127.0.0.1:9741") {
+                        error!("Failed to open settings: {}", e);
+                    }
+                }
+                UiCommand::SwitchProfile(name) => {
+                    info!("Switched to profile over UI: {}", name);
+                }
             }
         }
-    }
-}
 
-/// Idle state: block until we receive a Start signal.
-async fn state_idle(input_rx: &mut InputRx, _hotkey_label: &str, config: &Config) -> State {
-    debug!("Idle, waiting for hotkey...");
+        match input_rx.try_recv() {
+            Ok(InputSignal::Start(profile_name)) => {
+                // Find the matching profile
+                let profile = config.profiles.iter().find(|p| p.name == profile_name);
 
-    loop {
-        match input_rx.recv().await {
-            Some(InputSignal::Start) => {
-                info!("🎤 Recording...");
-                if config.sound_enabled {
-                    crate::audio_feedback::play_start_beep();
+                if let Some(profile) = profile {
+                    info!(profile = %profile_name, "🎤 Recording...");
+                    if config.global.sound_enabled {
+                        crate::audio_feedback::play_start_beep();
+                    }
+                    
+                    let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Recording { 
+                        profile: profile.name.clone() 
+                    }));
+                    let _ = ui_proxy.send_event(DaemonEvent::ProfileActivated(ProfileInfo {
+                        name: profile.name.clone(),
+                        model_name: profile.model.clone(),
+                        active: true,
+                    }));
+
+                    // Run the recording→transcribe→inject pipeline
+                    state_recording(&config, profile, &mut input_rx, &ui_proxy).await;
+                    
+                    let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
+                } else {
+                    warn!(profile = %profile_name, "Unknown profile triggered");
                 }
-                return State::Recording;
             }
-            Some(InputSignal::Stop) => {
+            Ok(InputSignal::Stop) => {
                 // Spurious stop while idle, ignore
                 continue;
             }
-            None => {
+            Err(mpsc::error::TryRecvError::Disconnected) => {
                 error!("Input channel closed unexpectedly");
-                // Channel closed — re-enter idle (will block forever, effectively shutting down)
-                std::future::pending::<()>().await;
-                return State::Idle;
+                return Ok(());
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {
+                // Prevent busy-looping
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
         }
     }
@@ -145,7 +149,7 @@ async fn state_idle(input_rx: &mut InputRx, _hotkey_label: &str, config: &Config
 
 /// Recording state: capture audio to buffer, then send to Gemini REST API.
 /// Handles the full lifecycle: Recording → Processing → Injecting → Idle.
-async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label: &str) -> State {
+async fn state_recording(config: &ConfigV2, profile: &Profile, input_rx: &mut InputRx, ui_proxy: &EventLoopProxy<DaemonEvent>) {
     debug!("Capturing audio to buffer");
 
     // Audio capture channel — uses std::sync::mpsc (NOT tokio) because
@@ -157,18 +161,21 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
 
     // Start audio capture on a dedicated OS thread
     let recording_flag_clone = recording_flag.clone();
-    if let Err(e) = audio::start_capture(audio_tx, recording_flag_clone) {
-        error!(%e, "Failed to start audio capture");
-        warn!("Returning to idle due to audio capture failure");
-        return State::Idle;
-    }
+    let audio_thread_handle = match audio::start_capture(audio_tx, recording_flag_clone, config.global.audio_device.clone()) {
+        Ok(handle) => handle,
+        Err(e) => {
+            error!(%e, "Failed to start audio capture");
+            warn!("Returning to idle due to audio capture failure");
+            return;
+        }
+    };
 
     // Spawn a blocking task that drains the std::sync::mpsc receiver.
     // This runs on tokio's blocking thread pool so it won't block the async runtime.
     let collector_handle = tokio::task::spawn_blocking(move || {
-        // Pre-allocate buffer for ~10 seconds of audio (160,000 samples)
+        // Pre-allocate buffer for ~30 seconds of audio (480,000 samples)
         // to avoid reallocations during recording.
-        let mut all_samples = Vec::<i16>::with_capacity(160_000);
+        let mut all_samples = Vec::<i16>::with_capacity(480_000);
         // recv() blocks until a chunk arrives or all senders are dropped
         while let Ok(chunk) = audio_rx.recv() {
             all_samples.extend_from_slice(&chunk);
@@ -182,7 +189,7 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
             Some(InputSignal::Stop) => {
                 break;
             }
-            Some(InputSignal::Start) => {
+            Some(InputSignal::Start(_)) => {
                 // Double press while recording, ignore
                 continue;
             }
@@ -190,7 +197,7 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
                 error!("Input channel closed during recording");
                 recording_flag.store(false, Ordering::Relaxed);
                 collector_handle.abort();
-                return State::Idle;
+                return;
             }
         }
     }
@@ -205,45 +212,73 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
         Ok(samples) => samples,
         Err(e) => {
             error!(%e, "Audio collector task failed");
-            return State::Idle;
+            return;
         }
     };
+
+    // Cleanly join the audio capture thread
+    if let Err(e) = audio_thread_handle.join() {
+        error!("Audio capture thread panicked: {:?}", e);
+    }
 
     let duration = all_samples.len() as f64 / 16_000.0;
     info!(
         duration = format!("{:.1}s", duration),
         "⏹ Stopped. Transcribing..."
     );
-    if config.sound_enabled {
+    if config.global.sound_enabled {
         crate::audio_feedback::play_stop_beep();
     }
 
     if all_samples.is_empty() {
         warn!("No audio captured, skipping transcription");
-        return State::Idle;
+        return;
     }
 
-    let (transcription, usage) = match network::transcribe(config, &all_samples).await {
+    let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Processing {
+        profile: profile.name.clone()
+    }));
+
+    // Pass the active profile and its model
+    let provider = match providers::create_provider(profile, &config.keys) {
+        Ok(p) => p,
+        Err(e) => {
+            error!(%e, "Failed to create provider");
+            warn!("Returning to idle due to provider error");
+            if config.global.sound_enabled {
+                crate::audio_feedback::play_error_beep();
+            }
+            return;
+        }
+    };
+
+    let (transcription, usage) = match provider.transcribe(&all_samples, &config.global.language).await {
         Ok(result) => result,
         Err(e) => {
             error!(%e, "Transcription failed");
             warn!("Returning to idle due to transcription failure");
-            if config.sound_enabled {
+            if config.global.sound_enabled {
                 crate::audio_feedback::play_error_beep();
             }
-            return State::Idle;
+            return;
         }
     };
 
     if transcription.is_empty() {
         warn!("Empty transcription received, skipping injection");
-        return State::Idle;
+        return;
     }
 
-    // Track cost and usage
-    let record = crate::tracking::build_record(&config.model, duration, &usage, &transcription);
+    let final_text = if !profile.transforms.is_empty() {
+        transforms::run_pipeline(&profile.transforms, &transcription, &config.global.language).await
+    } else {
+        transcription.clone()
+    };
 
-    let log_line = crate::tracking::format_log_line(&record, &config.currency);
+    // Track cost and usage with the correct model from the active profile
+    let record = crate::tracking::build_record(&profile.model, duration, &usage, &final_text);
+
+    let log_line = crate::tracking::format_log_line(&record, &config.global.currency);
     info!("{}", log_line);
 
     if let Err(e) = crate::tracking::append_record(&record) {
@@ -251,14 +286,13 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
     }
 
     // Inject the transcribed text
-
     // Run injection on a blocking thread to avoid blocking the async runtime
-    let text = transcription.clone();
+    let text = final_text.clone();
     let inject_result = tokio::task::spawn_blocking(move || injector::inject(&text)).await;
 
     match inject_result {
         Ok(Ok(())) => {
-            info!(text = %truncate(&transcription, 80), "✅ Injected");
+            info!(text = %truncate(&final_text, 80), "✅ Injected");
         }
         Ok(Err(e)) => {
             error!(%e, "Text injection failed");
@@ -267,8 +301,6 @@ async fn state_recording(config: &Config, input_rx: &mut InputRx, _hotkey_label:
             error!(%e, "Injection task panicked");
         }
     }
-
-    State::Idle
 }
 
 /// Truncate a string for log display.
