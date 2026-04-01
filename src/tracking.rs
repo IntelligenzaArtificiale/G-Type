@@ -154,6 +154,9 @@ pub struct TranscriptionRecord {
     pub word_count: u32,
     /// Character count of the transcribed text.
     pub char_count: u32,
+    /// The actual transcribed text — serde(default) keeps old records readable.
+    #[serde(default)]
+    pub text: String,
 }
 
 /// Token usage returned from the Gemini API response.
@@ -203,7 +206,17 @@ pub fn build_record(
         total_cost_usd: total_cost,
         word_count,
         char_count,
+        text: transcription.to_string(),
     }
+}
+
+/// Load the most recent `n` records in reverse-chronological order (newest first).
+/// Used by the web UI history panel.
+pub fn load_recent_records(n: usize) -> Result<Vec<TranscriptionRecord>> {
+    let mut all = load_records()?;
+    all.reverse();
+    all.truncate(n);
+    Ok(all)
 }
 
 /// Get current UTC timestamp as ISO 8601 string without external crate.

@@ -280,7 +280,7 @@ fn main() -> Result<()> {
     let (ui_tx, ui_rx) = std::sync::mpsc::channel::<ui_bridge::UiCommand>();
 
     // Create the native OS Main Window loop (Winit)
-    use winit::event_loop::{ControlFlow, EventLoop};
+    use winit::event_loop::ControlFlow;
     let event_loop = winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>::with_user_event().build().unwrap();
     event_loop.set_control_flow(ControlFlow::Wait);
 
@@ -289,94 +289,100 @@ fn main() -> Result<()> {
     // Spawn Background Daemon Thread
     std::thread::spawn(move || {
         rt.block_on(async move {
-            // Run the main event loop (never returns under normal operation)
             if let Err(e) = app::run_with_ui(cfg, ui_proxy, ui_rx).await {
                 error!(%e, "Fatal error in main tokio loop");
                 eprintln!("\n❌ Fatal: {e}\n");
                 std::process::exit(1);
             }
         });
-    });    // We instantiate TrayManager and OverlayManager once the event loop is running.
-    // However, in winit 0.30+, `run` is deprecated in favor of `run_app`. We'll just suppress
-    // the deprecation warning and use the closure for simplicity of porting existing logic.
+    });
+
+    // Managers are owned by the closure (no static mut, no unsafe).
+    // They are initialized once on the first event loop tick.
+    let mut tray_mgr:    Option<tray::TrayManager>    = None;
+    let mut overlay_mgr: Option<overlay::OverlayManager> = None;
+
     #[allow(deprecated)]
     let _ = event_loop.run(move |event, elwt| {
-        // UI Managers will be instantiated asynchronously on Resumed or via standard event matching
-        use winit::event::{Event, WindowEvent};
+        use winit::event::{Event, StartCause, WindowEvent};
         use crate::ui_bridge::{DaemonEvent, DaemonState};
-        
-        // Static references to managers
-        // (Due to closure borrowing rules, we can use static or Option variables moved in)
-        // For simplicity, handle state here via local options.
-        static mut TRAY_MGR: Option<tray::TrayManager> = None;
-        static mut OVERLAY_MGR: Option<overlay::OverlayManager> = None;
 
         match event {
-            Event::Resumed => {
-                // Initialize Tray
-                if unsafe { TRAY_MGR.is_none() } {
-                    let tm = tray::TrayManager::new(ui_tx.clone()).expect("Failed to create TrayManager");
-                    unsafe { TRAY_MGR = Some(tm); }
+            // NewEvents(Init) fires first on all desktop platforms.
+            // Resumed fires on macOS/Android lifecycle; we handle both for safety.
+            Event::NewEvents(StartCause::Init) | Event::Resumed => {
+                if tray_mgr.is_none() {
+                    match tray::TrayManager::new(ui_tx.clone()) {
+                        Ok(tm)  => { info!("Tray icon initialized"); tray_mgr = Some(tm); }
+                        Err(e)  => error!("TrayManager init failed: {}", e),
+                    }
                 }
 
-                // Initialize Overlay
-                if unsafe { OVERLAY_MGR.is_none() } {
-                    use winit::window::Window;
-                    let window = elwt.create_window(
-                        Window::default_attributes()
+                if overlay_mgr.is_none() {
+                    let attrs = winit::window::Window::default_attributes()
                         .with_title("G-Type Overlay")
+                        .with_inner_size(winit::dpi::LogicalSize::new(320.0_f64, 56.0_f64))
                         .with_decorations(false)
                         .with_transparent(true)
                         .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
-                        .with_visible(false) // hidden until recording
-                    ).expect("Failed to build window");
-                        
-                    let om = overlay::OverlayManager::new(&window, ui_tx.clone()).expect("Failed to create OverlayManager");
-                    unsafe { OVERLAY_MGR = Some(om); }
+                        .with_resizable(false)
+                        .with_visible(true); // always live; pill hides via CSS + cursor_hittest(false)
+
+                    match elwt.create_window(attrs) {
+                        Ok(window) => {
+                            // Pass ownership of `window` into OverlayManager so it is never dropped.
+                            match overlay::OverlayManager::new(window, ui_tx.clone()) {
+                                Ok(om)  => { info!("Overlay initialized"); overlay_mgr = Some(om); }
+                                Err(e)  => error!("OverlayManager init failed: {}", e),
+                            }
+                        }
+                        Err(e) => error!("Overlay window creation failed: {}", e),
+                    }
                 }
             }
+
+            Event::AboutToWait => {
+                // Pump the GTK event loop so tray-icon renders on Linux.
+                // Without this, the StatusNotifier/AppIndicator tray item never appears.
+                #[cfg(target_os = "linux")]
+                while gtk::events_pending() {
+                    gtk::main_iteration_do(false);
+                }
+            }
+
             Event::UserEvent(daemon_event) => {
                 match daemon_event {
                     DaemonEvent::StateChanged(state) => {
-                        let tray_ref = unsafe { TRAY_MGR.as_ref() };
-                        let overlay_ref = unsafe { OVERLAY_MGR.as_ref() };
-
                         match state {
                             DaemonState::Idle => {
-                                if let Some(t) = tray_ref { let _ = t.set_idle(); }
-                                if let Some(o) = overlay_ref { let _ = o.set_idle(); }
+                                if let Some(t) = &tray_mgr    { t.set_idle(); }
+                                if let Some(o) = &overlay_mgr { let _ = o.set_idle(); }
                             }
                             DaemonState::Recording { profile } => {
-                                if let Some(t) = tray_ref { let _ = t.set_recording(&profile); }
-                                if let Some(o) = overlay_ref { let _ = o.set_recording(); }
+                                if let Some(t) = &tray_mgr    { t.set_recording(&profile); }
+                                if let Some(o) = &overlay_mgr { let _ = o.set_recording(); }
                             }
-                            DaemonState::Processing { profile } => {
-                                if let Some(t) = tray_ref { let _ = t.set_processing(); }
-                                if let Some(o) = overlay_ref { let _ = o.set_processing(); }
+                            DaemonState::Processing { profile: _ } => {
+                                if let Some(t) = &tray_mgr    { t.set_processing(); }
+                                if let Some(o) = &overlay_mgr { let _ = o.set_processing(); }
                             }
                         }
                     }
-                    DaemonEvent::ProfileActivated(info) => {
-                        let tray_ref = unsafe { TRAY_MGR.as_ref() };
-                        if let Some(t) = tray_ref {
-                            // Can add tooltips later
-                            let _ = t;
-                        }
-                    }
-                    DaemonEvent::ProfilesUpdated(_) => {
-                        // Can refresh tray menu items later
-                    }
+                    DaemonEvent::ProfileActivated(_) => {}
+                    DaemonEvent::ProfilesUpdated(_)  => {}
                     DaemonEvent::Error(err) => {
-                        error!("UI received error event: {}", err);
+                        error!("UI error: {}", err);
                     }
                     DaemonEvent::Quit => {
                         elwt.exit();
                     }
                 }
             }
+
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 elwt.exit();
             }
+
             _ => {}
         }
     });

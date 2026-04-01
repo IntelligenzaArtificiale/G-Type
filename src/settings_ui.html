@@ -1,143 +1,351 @@
 <!DOCTYPE html>
 <html lang="it" class="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>G-Type | Settings</title>
-    <!-- Tailwind CSS (Play CDN for Antirex zero-build flow) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        gray: {
-                            950: '#0a0a0a',
-                        }
-                    }
-                }
-            }
-        }
-    </script>
-    <!-- Chart.js for stats -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>G-Type | Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: { extend: { colors: { gray: { 950: '#0a0a0a' } } } }
+  }
+</script>
+<style>
+  .fade-in { animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+  .toast { position:fixed; bottom:24px; right:24px; z-index:100; transition: opacity 0.3s; }
+  .toast.hide { opacity:0; pointer-events:none; }
+</style>
 </head>
-<body class="bg-gray-950 text-gray-200 font-sans antialiased min-h-screen flex flex-col items-center">
-    <div class="w-full max-w-4xl mx-auto p-8 mt-10">
-        
-        <header class="flex justify-between items-center mb-12 border-b border-gray-800 pb-6">
-            <div>
-                <h1 class="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">G-Type V2</h1>
-                <p class="text-sm text-gray-500 mt-2 tracking-widest uppercase">The Antirex Dictation Daemon</p>
-            </div>
-            
-            <div class="flex items-center space-x-6 text-center">
-                <div>
-                    <p class="text-3xl font-mono text-emerald-400" id="stat-money">$0.00</p>
-                    <p class="text-xs text-gray-500 uppercase tracking-widest">Risparmiati</p>
-                </div>
-                <div class="w-px h-10 bg-gray-800"></div>
-                <div>
-                    <p class="text-3xl font-mono text-blue-400" id="stat-time">0h</p>
-                    <p class="text-xs text-gray-500 uppercase tracking-widest">Ore Guadagnate</p>
-                </div>
-            </div>
-        </header>
+<body class="bg-gray-950 text-gray-200 font-sans antialiased min-h-screen">
 
-        <main class="grid grid-cols-1 md:grid-cols-[1fr_2fr] gap-8">
-            <!-- Sidebar: Config Actions -->
-            <aside class="space-y-6">
-                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl">
-                    <h3 class="text-lg font-semibold text-white mb-4">Profilo Attivo</h3>
-                    <select id="active-profile" class="w-full bg-gray-950 border border-gray-700 text-sm text-white rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors">
-                        <option>Caricamento...</option>
-                    </select>
-                </div>
+<!-- Toast notification -->
+<div id="toast" class="toast hide">
+  <div class="bg-gray-800 border border-gray-700 rounded-xl px-5 py-3 shadow-2xl text-sm font-medium" id="toast-msg"></div>
+</div>
 
-                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl">
-                    <h3 class="text-lg font-semibold text-white mb-4">Modifica Veloce</h3>
-                    <p class="text-sm text-gray-400 mb-4">La UI completa di edit profili arriverà, per ora apre il file TOML.</p>
-                    <button onclick="openToml()" class="w-full py-2 px-4 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700 transition font-medium">
-                        Apri config.toml a mano
-                    </button>
-                    <p class="text-xs text-gray-600 mt-3 text-center">G-Type rilegge il TOML on-the-fly senza restart.</p>
-                </div>
-            </aside>
+<div class="max-w-5xl mx-auto px-6 py-10">
 
-            <!-- Main: Chart & Stats -->
-            <section class="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl">
-                <h3 class="text-lg font-semibold text-white mb-6">Utilizzo API</h3>
-                <div class="w-full h-64">
-                    <canvas id="usageChart"></canvas>
-                </div>
-            </section>
-        </main>
-        
-        <footer class="mt-20 text-center text-gray-600 text-sm border-t border-gray-900 pt-8">
-            Daemon in ascolto. Premi il tuo hotkey per parlare.
-        </footer>
+  <!-- Header -->
+  <header class="flex flex-wrap justify-between items-start gap-6 mb-10 pb-6 border-b border-gray-800">
+    <div>
+      <h1 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">G-Type</h1>
+      <p class="text-xs text-gray-500 mt-1 tracking-widest uppercase">Antirex Dictation Daemon</p>
     </div>
+    <div class="flex gap-8 text-center">
+      <div>
+        <p class="text-2xl font-mono text-emerald-400" id="stat-money">—</p>
+        <p class="text-xs text-gray-500 uppercase tracking-wider mt-1">Costo totale</p>
+      </div>
+      <div class="w-px bg-gray-800"></div>
+      <div>
+        <p class="text-2xl font-mono text-blue-400" id="stat-time">—</p>
+        <p class="text-xs text-gray-500 uppercase tracking-wider mt-1">Tempo risparmiato</p>
+      </div>
+      <div class="w-px bg-gray-800"></div>
+      <div>
+        <p class="text-2xl font-mono text-violet-400" id="stat-words">—</p>
+        <p class="text-xs text-gray-500 uppercase tracking-wider mt-1">Parole dettate</p>
+      </div>
+    </div>
+  </header>
 
-    <script>
-        // Init chart
-        const ctx = document.getElementById('usageChart').getContext('2d');
-        const usageChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'],
-                datasets: [{
-                    label: 'Tokens Generati',
-                    data: [0, 0, 0, 0, 0, 0, 0],
-                    borderColor: '#60a5fa',
-                    backgroundColor: 'rgba(96, 165, 250, 0.1)',
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false }
-                },
-                scales: {
-                    x: { grid: { color: '#262626' }, ticks: { color: '#525252' } },
-                    y: { grid: { color: '#262626' }, ticks: { color: '#525252' } }
-                }
-            }
-        });
+  <!-- Two-column layout -->
+  <div class="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-8">
 
-        // Fetch data
-        async function fetchState() {
-            try {
-                const res = await fetch('/api/state');
-                const state = await res.json();
-                
-                // Update money & time stub (Assuming standard 30wpm typing vs STT)
-                document.getElementById('stat-money').innerText = `$0.00`;
-                document.getElementById('stat-time').innerText = `0.0h`;
+    <!-- LEFT: Profile management -->
+    <aside class="space-y-6">
 
-                // Update profiles
-                const select = document.getElementById('active-profile');
-                select.innerHTML = '';
-                for (const p of state.config.profiles || []) {
-                    const opt = document.createElement('option');
-                    opt.value = p.name;
-                    opt.text = `${p.name} - [${p.hotkeys.join(' + ')}]`;
-                    select.appendChild(opt);
-                }
-            } catch (e) {
-                console.error("Errore fetch state:", e);
-            }
-        }
-        
-        async function openToml() {
-            await fetch('/api/open_config', { method: 'POST' });
-        }
+      <!-- Profile list -->
+      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+        <h2 class="text-base font-semibold text-white mb-4">Profili attivi</h2>
+        <div id="profile-list" class="space-y-2 mb-4">
+          <p class="text-sm text-gray-500">Caricamento...</p>
+        </div>
+        <button onclick="showCreateForm()" id="btn-add"
+          class="w-full py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition">
+          + Nuovo profilo
+        </button>
+      </div>
 
-        fetchState();
-    </script>
+      <!-- Create profile form (hidden by default) -->
+      <div id="create-form" class="hidden bg-gray-900 border border-blue-800/40 rounded-2xl p-6 fade-in">
+        <h2 class="text-base font-semibold text-white mb-4">Crea profilo</h2>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Nome</label>
+            <input id="f-name" type="text" placeholder="es. Email formale"
+              class="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-blue-500 transition">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Hotkey</label>
+            <input id="f-hotkey" type="text" placeholder="es. ctrl+shift+e"
+              class="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-blue-500 transition font-mono">
+            <p class="text-xs text-gray-600 mt-1">Formato: ctrl+shift+e, alt+r, …</p>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Modello</label>
+            <select id="f-model"
+              class="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-blue-500 transition">
+              <option value="models/gemini-2.0-flash">gemini-2.0-flash (consigliato)</option>
+              <option value="models/gemini-2.5-flash">gemini-2.5-flash</option>
+              <option value="models/gemini-2.5-flash-lite">gemini-2.5-flash-lite (economico)</option>
+              <option value="models/gemini-2.5-pro">gemini-2.5-pro (qualità massima)</option>
+            </select>
+          </div>
+          <div class="flex gap-3 pt-2">
+            <button onclick="createProfile()"
+              class="flex-1 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition">
+              Crea
+            </button>
+            <button onclick="hideCreateForm()"
+              class="flex-1 py-2 text-sm font-medium rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition">
+              Annulla
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Open config.toml -->
+      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+        <p class="text-xs text-gray-500 mb-3">Modifiche avanzate (transforms, lingua, …)</p>
+        <button onclick="openToml()"
+          class="w-full py-2 text-sm font-medium rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition">
+          Apri config.toml
+        </button>
+      </div>
+
+    </aside>
+
+    <!-- RIGHT: Transcription history -->
+    <section class="bg-gray-900 border border-gray-800 rounded-2xl p-6 min-h-[400px]">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="text-base font-semibold text-white">Cronologia trascrizioni</h2>
+        <span class="text-xs text-gray-500" id="history-count"></span>
+      </div>
+
+      <div id="history-empty" class="hidden text-center py-16 text-gray-600 text-sm">
+        Nessuna trascrizione ancora. Premi il tuo hotkey per dettare.
+      </div>
+
+      <div id="history-list" class="space-y-3">
+        <p class="text-sm text-gray-500">Caricamento...</p>
+      </div>
+    </section>
+
+  </div><!-- end grid -->
+</div><!-- end container -->
+
+<script>
+// ── State ────────────────────────────────────────────────────
+var appConfig = null;
+
+// ── Boot ─────────────────────────────────────────────────────
+(async function init() {
+  await Promise.all([loadState(), loadHistory()]);
+})();
+
+// ── /api/state ───────────────────────────────────────────────
+async function loadState() {
+  try {
+    var res  = await fetch('/api/state');
+    var data = await res.json();
+    appConfig = data.config;
+
+    // Stats
+    var s = data.stats || {};
+    document.getElementById('stat-money').textContent =
+      '$' + (s.total_cost_usd || 0).toFixed(4);
+    document.getElementById('stat-time').textContent =
+      formatDuration(s.time_saved_secs || 0);
+    document.getElementById('stat-words').textContent =
+      (s.total_words || 0).toLocaleString('it');
+
+    renderProfiles(appConfig.profiles || []);
+  } catch(e) {
+    console.error('loadState failed:', e);
+  }
+}
+
+// ── Profile rendering ─────────────────────────────────────────
+function renderProfiles(profiles) {
+  var el = document.getElementById('profile-list');
+  if (!profiles.length) {
+    el.innerHTML = '<p class="text-sm text-gray-500">Nessun profilo.</p>';
+    return;
+  }
+  el.innerHTML = profiles.map(function(p) {
+    var modelShort = (p.model || '').replace('models/', '');
+    var canDelete  = profiles.length > 1;
+    return '<div class="flex items-start justify-between gap-3 bg-gray-800/50 rounded-xl px-4 py-3">' +
+      '<div class="min-w-0">' +
+        '<p class="text-sm font-medium text-white truncate">' + esc(p.name) + '</p>' +
+        '<p class="text-xs text-gray-500 mt-0.5 font-mono">' + esc(p.hotkey) + '</p>' +
+        '<p class="text-xs text-gray-600 mt-0.5">' + esc(modelShort) + '</p>' +
+      '</div>' +
+      (canDelete
+        ? '<button onclick="deleteProfile(' + JSON.stringify(p.name) + ')" ' +
+            'class="shrink-0 text-xs text-gray-600 hover:text-red-400 transition px-2 py-1 rounded hover:bg-red-400/10">' +
+            'Elimina</button>'
+        : '') +
+    '</div>';
+  }).join('');
+}
+
+// ── Create profile ────────────────────────────────────────────
+function showCreateForm() {
+  document.getElementById('create-form').classList.remove('hidden');
+  document.getElementById('f-name').focus();
+}
+function hideCreateForm() {
+  document.getElementById('create-form').classList.add('hidden');
+  document.getElementById('f-name').value    = '';
+  document.getElementById('f-hotkey').value  = '';
+}
+
+async function createProfile() {
+  var name   = document.getElementById('f-name').value.trim();
+  var hotkey = document.getElementById('f-hotkey').value.trim();
+  var model  = document.getElementById('f-model').value;
+
+  if (!name || !hotkey) { toast('Nome e hotkey sono obbligatori', true); return; }
+
+  try {
+    var res = await fetch('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, hotkey, model, provider: 'gemini' })
+    });
+    var data = await res.json();
+    if (!res.ok) { toast(data.error || 'Errore', true); return; }
+
+    toast('Profilo "' + name + '" creato. Riavvia G-Type per attivarlo.');
+    hideCreateForm();
+    await loadState();
+  } catch(e) { toast('Errore di rete', true); }
+}
+
+// ── Delete profile ────────────────────────────────────────────
+async function deleteProfile(name) {
+  if (!confirm('Eliminare il profilo "' + name + '"?')) return;
+  try {
+    var res  = await fetch('/api/profiles/' + encodeURIComponent(name), { method: 'DELETE' });
+    var data = await res.json();
+    if (!res.ok) { toast(data.error || 'Errore', true); return; }
+
+    toast('Profilo eliminato. Riavvia G-Type per applicare.');
+    await loadState();
+  } catch(e) { toast('Errore di rete', true); }
+}
+
+// ── /api/history ─────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    var res     = await fetch('/api/history');
+    var records = await res.json();
+
+    var listEl  = document.getElementById('history-list');
+    var emptyEl = document.getElementById('history-empty');
+    var countEl = document.getElementById('history-count');
+
+    if (!records || !records.length) {
+      listEl.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      countEl.textContent = '';
+      return;
+    }
+
+    countEl.textContent = records.length + ' registrazioni';
+    emptyEl.classList.add('hidden');
+
+    listEl.innerHTML = records.map(function(r, i) {
+      var dateStr  = r.timestamp ? r.timestamp.replace('T', ' ').replace('Z', ' UTC') : '';
+      var dur      = r.audio_duration_secs ? r.audio_duration_secs.toFixed(1) + 's' : '';
+      var cost     = r.total_cost_usd ? '$' + r.total_cost_usd.toFixed(5) : '$0';
+      var words    = r.word_count || 0;
+      var textFull = r.text || '';
+      var textPrev = textFull.length > 120 ? textFull.slice(0, 120) + '…' : textFull;
+      var modelS   = (r.model || '').replace('models/', '');
+      var id       = 'rec-' + i;
+
+      return '<div class="border border-gray-800 rounded-xl p-4 hover:border-gray-700 transition fade-in">' +
+        '<div class="flex flex-wrap justify-between items-start gap-2 mb-2">' +
+          '<div class="flex items-center gap-3 text-xs text-gray-500">' +
+            '<span>' + esc(dateStr) + '</span>' +
+            '<span class="text-gray-700">·</span>' +
+            '<span>' + esc(dur) + '</span>' +
+            '<span class="text-gray-700">·</span>' +
+            '<span>' + words + ' parole</span>' +
+            '<span class="text-gray-700">·</span>' +
+            '<span class="text-gray-600">' + esc(modelS) + '</span>' +
+          '</div>' +
+          '<div class="flex items-center gap-2">' +
+            '<span class="text-xs text-gray-600">' + esc(cost) + '</span>' +
+            '<button onclick="copyText(' + JSON.stringify(textFull) + ', this)" ' +
+              'class="text-xs text-gray-500 hover:text-white border border-gray-700 hover:border-gray-500 rounded px-2 py-0.5 transition">' +
+              'Copia</button>' +
+          '</div>' +
+        '</div>' +
+        '<p id="' + id + '" class="text-sm text-gray-300 leading-relaxed">' + esc(textPrev) + '</p>' +
+        (textFull.length > 120
+          ? '<button onclick="expandText(' + JSON.stringify(id) + ',' + JSON.stringify(textFull) + ',this)" ' +
+              'class="text-xs text-blue-400 hover:text-blue-300 mt-1 transition">Mostra tutto</button>'
+          : '') +
+      '</div>';
+    }).join('');
+
+  } catch(e) {
+    console.error('loadHistory failed:', e);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(function() {
+    var orig = btn.textContent;
+    btn.textContent = 'Copiato!';
+    btn.classList.add('text-emerald-400', 'border-emerald-700');
+    setTimeout(function() {
+      btn.textContent = orig;
+      btn.classList.remove('text-emerald-400', 'border-emerald-700');
+    }, 1500);
+  });
+}
+
+function expandText(id, fullText, btn) {
+  document.getElementById(id).textContent = fullText;
+  btn.remove();
+}
+
+async function openToml() {
+  await fetch('/api/open_config', { method: 'POST' });
+}
+
+function formatDuration(secs) {
+  if (!secs || secs < 60) return Math.floor(secs || 0) + 's';
+  if (secs < 3600) return (secs / 60).toFixed(1) + 'min';
+  return (secs / 3600).toFixed(1) + 'h';
+}
+
+var toastTimer = null;
+function toast(msg, isError) {
+  var el  = document.getElementById('toast');
+  var msg_el = document.getElementById('toast-msg');
+  msg_el.textContent = msg;
+  msg_el.className = isError
+    ? 'bg-gray-800 border border-red-800/50 text-red-300 rounded-xl px-5 py-3 shadow-2xl text-sm font-medium'
+    : 'bg-gray-800 border border-emerald-800/50 text-emerald-300 rounded-xl px-5 py-3 shadow-2xl text-sm font-medium';
+  el.classList.remove('hide');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { el.classList.add('hide'); }, 3500);
+}
+</script>
 </body>
 </html>
