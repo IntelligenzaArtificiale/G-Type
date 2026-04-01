@@ -63,12 +63,21 @@ fn main() -> Result<()> {
             return Ok(());
         }
         Some("setup") => {
-                let _path = config::config_path().unwrap_or_default();
-            if let Err(e) = config::load() {
-                eprintln!("\n❌ Setup failed: {e}\n");
-                std::process::exit(1);
+            // Check if daemon is already running by probing the port
+            if std::net::TcpStream::connect("127.0.0.1:9741").is_ok() {
+                println!("G-Type è già in esecuzione. Apertura pagina di setup nel browser...");
+                let _ = open::that("http://127.0.0.1:9741/setup");
+                return Ok(());
             }
-            println!("Ready. Use the web settings to configure further.");
+
+            println!("Il demone non è in esecuzione. Avvio di G-Type in background...");
+            // Just launch the daemon detached so it binds the port and serves the setup
+            std::process::Command::new(std::env::current_exe()?)
+                .spawn()?;
+            
+            // Give it half a second to bind
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let _ = open::that("http://127.0.0.1:9741/setup");
             return Ok(());
         }
         Some("stats") => {
@@ -209,10 +218,21 @@ fn main() -> Result<()> {
 
     let cfg_shared = std::sync::Arc::new(tokio::sync::RwLock::new(cfg.clone()));
 
+    // Try to bind the port. If it fails, another instance is already running.
+    let listener = match rt.block_on(tokio::net::TcpListener::bind("127.0.0.1:9741")) {
+        Ok(l) => l,
+        Err(_e) => {
+            eprintln!("\n❌ G-Type è già in esecuzione in background!");
+            eprintln!("💡 Controlla l'icona nella barra delle applicazioni (vicino all'orologio).");
+            eprintln!("   Per configurare G-Type vai su: http://127.0.0.1:9741/\n");
+            std::process::exit(1);
+        }
+    };
+
     // Spawn Settings Dashboard over HTTP (always running for settings & setup)
     let cfg_server_clone = cfg_shared.clone();
     rt.spawn(async move {
-        if let Err(e) = settings::start_server(cfg_server_clone).await {
+        if let Err(e) = settings::start_server_with_listener(listener, cfg_server_clone).await {
             error!("Settings server failed: {}", e);
         }
     });

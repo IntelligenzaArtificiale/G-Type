@@ -27,7 +27,10 @@ struct SetupPayload {
     hotkey: String,
 }
 
-pub async fn start_server(config: Arc<RwLock<ConfigV2>>) -> Result<()> {
+pub async fn start_server_with_listener(
+    listener: tokio::net::TcpListener,
+    config: Arc<RwLock<ConfigV2>>,
+) -> Result<()> {
     let state = AppState { config };
 
     let app = Router::new()
@@ -38,12 +41,8 @@ pub async fn start_server(config: Arc<RwLock<ConfigV2>>) -> Result<()> {
         .route("/api/open_config", post(api_open_config))
         .with_state(state);
 
-    let port = 9741;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    
-    tracing::info!("UI Settings Server running on http://{}", addr);
+    tracing::info!("UI Settings Server running on http://{}", listener.local_addr()?);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app)
         .await
         .map_err(|e| anyhow::anyhow!("Axum server error: {}", e))
