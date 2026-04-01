@@ -56,11 +56,9 @@ async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
     Html(include_str!("settings_ui.html")).into_response()
 }
 
-async fn serve_setup(State(state): State<AppState>) -> impl IntoResponse {
-    let config = state.config.read().await;
-    if !config.keys.is_empty() {
-        return Redirect::to("/").into_response();
-    }
+async fn serve_setup(State(_state): State<AppState>) -> impl IntoResponse {
+    // Rimuoviamo il redirect: se l'utente vuole forzare il /setup (ad es. da `g-type setup`)
+    // deve poterlo vedere anche se ha già le chiavi configurate.
     Html(include_str!("setup_ui.html")).into_response()
 }
 
