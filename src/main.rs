@@ -21,7 +21,7 @@ mod ui_bridge;
 mod upgrade;
 
 use anyhow::Result;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 fn print_usage() {
@@ -191,8 +191,7 @@ fn main() -> Result<()> {
         "G-Type daemon starting"
     );
 
-    // Load config (auto-triggers interactive setup if missing)
-    let cfg = match config::load() {
+    let mut cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
             error!(%e, "Configuration error");
@@ -200,6 +199,46 @@ fn main() -> Result<()> {
             std::process::exit(1);
         }
     };
+
+    // --- Web Onboarding Flow ---
+    // If there are no API keys configured, we assume first run.
+    let is_first_run = cfg.keys.is_empty();
+    
+    // We start the tokio runtime here because we need it for the settings server anyway
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let cfg_shared = std::sync::Arc::new(tokio::sync::RwLock::new(cfg.clone()));
+
+    // Spawn Settings Dashboard over HTTP (always running for settings & setup)
+    let cfg_server_clone = cfg_shared.clone();
+    rt.spawn(async move {
+        if let Err(e) = settings::start_server(cfg_server_clone).await {
+            error!("Settings server failed: {}", e);
+        }
+    });
+
+    if is_first_run {
+        info!("No API keys found. Launching initial web setup...");
+        
+        let setup_url = "http://127.0.0.1:9741/setup";
+        if let Err(e) = open::that(setup_url) {
+            warn!("Could not open browser automatically: {}", e);
+        }
+
+        // Wait in a loop until the API key is populated
+        rt.block_on(async {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+                let current_cfg = cfg_shared.read().await;
+                if !current_cfg.keys.is_empty() {
+                    // Update our local synchronous config
+                    cfg = current_cfg.clone();
+                    info!("Setup complete! Proceeding to background daemon.");
+                    break;
+                }
+            }
+        });
+    }
 
     let p0 = cfg.profiles.get(0).expect("At least 1 profile must exist");
     debug!(
@@ -212,29 +251,19 @@ fn main() -> Result<()> {
     // -> OS Thread: winit event loop (required for GUI components like UI floating pill)
     // -> Spawned Thread: tokio background runtime (Settings API, audio logic, hotkeys)
 
-    let rt = tokio::runtime::Runtime::new()?;
-
     // Set up cross-thread communication for Winit <-> Tokio
     let (ui_tx, ui_rx) = std::sync::mpsc::channel::<ui_bridge::UiCommand>();
-    
+
     // Create the native OS Main Window loop (Winit)
     use winit::event_loop::{ControlFlow, EventLoop};
     let event_loop = winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>::with_user_event().build().unwrap();
     event_loop.set_control_flow(ControlFlow::Wait);
-    
+
     let ui_proxy = event_loop.create_proxy();
 
     // Spawn Background Daemon Thread
     std::thread::spawn(move || {
         rt.block_on(async move {
-            // Spawn Settings Dashboard over HTTP
-            let cfg_shared = std::sync::Arc::new(tokio::sync::RwLock::new(cfg.clone()));
-            tokio::spawn(async move {
-                if let Err(e) = settings::start_server(cfg_shared).await {
-                    error!("Settings server failed: {}", e);
-                }
-            });
-
             // Run the main event loop (never returns under normal operation)
             if let Err(e) = app::run_with_ui(cfg, ui_proxy, ui_rx).await {
                 error!(%e, "Fatal error in main tokio loop");
@@ -242,9 +271,7 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         });
-    });
-
-    // We instantiate TrayManager and OverlayManager once the event loop is running.
+    });    // We instantiate TrayManager and OverlayManager once the event loop is running.
     // However, in winit 0.30+, `run` is deprecated in favor of `run_app`. We'll just suppress
     // the deprecation warning and use the closure for simplicity of porting existing logic.
     #[allow(deprecated)]

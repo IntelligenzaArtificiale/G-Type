@@ -68,8 +68,8 @@ download_binary() {
     local url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
 
     info "Downloading ${BIN_NAME} ${version} for ${platform}..."
-
     mkdir -p "$INSTALL_DIR"
+    rm -f "${INSTALL_DIR}/${BIN_NAME}"
 
     if command -v curl &>/dev/null; then
         curl -sSfL "$url" -o "${INSTALL_DIR}/${BIN_NAME}"
@@ -103,9 +103,7 @@ persist_path_update() {
 
     shell_name="$(basename "${SHELL:-}")"
     case "$shell_name" in
-        zsh)
-            profile="${HOME}/.zshrc"
-            ;;
+        zsh) profile="${HOME}/.zshrc" ;;
         bash)
             if [[ "$(uname -s)" == "Darwin" ]]; then
                 profile="${HOME}/.bash_profile"
@@ -113,10 +111,7 @@ persist_path_update() {
                 profile="${HOME}/.bashrc"
             fi
             ;;
-        *)
-            # Fallback for uncommon shells
-            profile="${HOME}/.profile"
-            ;;
+        *) profile="${HOME}/.profile" ;;
     esac
 
     if [[ -f "$profile" ]] && grep -Fq "$export_line" "$profile"; then
@@ -134,21 +129,30 @@ persist_path_update() {
     info "Open a new terminal (or run: source ${profile}) before using '${BIN_NAME}'."
 }
 
-# Create config file if it doesn't exist — delegates to the binary's built-in wizard
-setup_config() {
-    if [[ -f "$CONFIG_FILE" ]]; then
-        ok "Config already exists at ${CONFIG_FILE}"
+setup_autostart() {
+    if [[ "$(uname -s)" != "Linux" ]]; then
         return
     fi
 
-    echo ""
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${CYAN}  Running first-time setup...${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
+    local AUTOSTART_DIR="${HOME}/.config/autostart"
+    local DESKTOP_FILE="${AUTOSTART_DIR}/g-type.desktop"
 
-    # Use the binary itself to run the interactive setup wizard
-    "${INSTALL_DIR}/${BIN_NAME}" setup
+    info "Setting up autostart..."
+    mkdir -p "$AUTOSTART_DIR"
+
+    cat > "$DESKTOP_FILE" << EOF
+[Desktop Entry]
+Type=Application
+Name=G-Type
+Comment=Voice Dictation Daemon
+Exec=${INSTALL_DIR}/${BIN_NAME}
+Icon=microphone
+Terminal=false
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+EOF
+
+    ok "Autostart desktop entry created at ${DESKTOP_FILE}"
 }
 
 # Install system dependencies on Linux
@@ -158,41 +162,39 @@ install_linux_deps() {
     fi
 
     info "Checking Linux audio/input dependencies..."
-
     local missing=()
 
-    if ! pkg-config --exists alsa 2>/dev/null; then
-        missing+=("libasound2-dev")
-    fi
+    if ! pkg-config --exists alsa 2>/dev/null; then missing+=("libasound2-dev"); fi
+    if ! pkg-config --exists x11 2>/dev/null; then missing+=("libx11-dev"); fi
+    if ! pkg-config --exists xtst 2>/dev/null; then missing+=("libxtst-dev"); fi
 
-    if ! pkg-config --exists x11 2>/dev/null; then
-        missing+=("libx11-dev")
-    fi
-
-    if ! pkg-config --exists xtst 2>/dev/null; then
-        missing+=("libxtst-dev")
-    fi
+    # UI Dependencies
+    if ! pkg-config --exists gtk+-3.0 2>/dev/null; then missing+=("libgtk-3-dev"); fi
+    if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then missing+=("libwebkit2gtk-4.1-dev"); fi
+    if ! pkg-config --exists appindicator3-0.1 2>/dev/null; then missing+=("libayatana-appindicator3-dev"); fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         warn "Missing system packages: ${missing[*]}"
         if command -v apt-get &>/dev/null; then
             info "Installing via apt-get..."
-            sudo apt-get install -y "${missing[@]}"
-        elif command -v dnf &>/dev/null; then
-            info "Please install equivalent packages with dnf."
-        elif command -v pacman &>/dev/null; then
-            info "Please install equivalent packages with pacman."
+            sudo apt-get update && sudo apt-get install -y "${missing[@]}"
         fi
     else
         ok "System dependencies satisfied"
     fi
 }
 
+start_daemon() {
+    info "Starting G-Type daemon..."
+    nohup "${INSTALL_DIR}/${BIN_NAME}" >/dev/null 2>&1 &
+    ok "Daemon started in background"
+}
+
 # Main
 main() {
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║       G-Type Installer v1.0          ║${NC}"
+    echo -e "${GREEN}║       G-Type Installer v2.0          ║${NC}"
     echo -e "${GREEN}║  Global Voice Dictation Daemon       ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
     echo ""
@@ -211,20 +213,15 @@ main() {
     if ! check_path; then
         persist_path_update
     fi
-    setup_config
+    
+    setup_autostart
+    start_daemon
 
     echo ""
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}  Installation complete!${NC}"
-    echo -e "${GREEN}  Run '${BIN_NAME}' to start the daemon.${NC}"
-    echo -e "${GREEN}  Hold your hotkey (default: CTRL+SHIFT+SPACE) to dictate.${NC}"
-    echo -e "${GREEN}${NC}"
-    echo -e "${GREEN}  Useful commands:${NC}"
-    echo -e "${GREEN}    g-type setup     Re-run setup wizard${NC}"
-    echo -e "${GREEN}    g-type stats     Show cost & usage statistics${NC}"
-    echo -e "${GREEN}    g-type upgrade   Self-update to latest version${NC}"
-    echo -e "${GREEN}    g-type set-key   Update API key${NC}"
-    echo -e "${GREEN}    g-type config    Show config path${NC}"
+    echo -e "${GREEN}  Look for the G-Type icon in your system tray.${NC}"
+    echo -e "${GREEN}  A setup page should open in your browser shortly.${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }

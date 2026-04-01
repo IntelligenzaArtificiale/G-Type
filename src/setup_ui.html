@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="it" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G-Type | Setup Iniziale</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { gray: { 950: '#0a0a0a' } } } }
+        }
+    </script>
+</head>
+<body class="bg-gray-950 text-gray-200 font-sans antialiased min-h-screen flex flex-col justify-center items-center">
+    <div class="w-full max-w-lg mx-auto p-8">
+        <header class="text-center mb-10">
+            <h1 class="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Benvenuto in G-Type</h1>
+            <p class="text-sm text-gray-500 mt-2 tracking-widest uppercase">The Zero Friction Dictation Daemon</p>
+        </header>
+
+        <form id="setupForm" class="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-xl space-y-6">
+            
+            <div id="step1" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-400 mb-2">1. Google Gemini API Key</label>
+                    <input type="password" id="api_key" required placeholder="AIzaSy..." 
+                           class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors">
+                    <p class="text-xs text-gray-600 mt-2">Ottieni una chiave gratuita su <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-blue-400 hover:underline">Google AI Studio</a>.</p>
+                </div>
+            </div>
+
+            <div id="step2" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-400 mb-2">2. Scegli il Modello</label>
+                    <select id="model" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-colors">
+                        <option value="models/gemini-2.0-flash">Gemini 2.0 Flash (Consigliato, velocissimo e gratis)</option>
+                        <option value="models/gemini-2.5-flash">Gemini 2.5 Flash (New!)</option>
+                        <option value="models/gemini-1.5-pro">Gemini 1.5 Pro (Migliore ragionamento, più lento)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="step3" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-400 mb-2">3. Registra Hotkey</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="hotkey" required readonly value="ctrl+shift+space"
+                               class="flex-1 bg-gray-950 border border-gray-700 text-white font-mono text-center rounded-lg p-3 outline-none cursor-pointer hover:border-blue-500 transition-colors focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <p class="text-xs text-gray-600 mt-2 text-center">Clicca sull'input e premi i tasti che vuoi usare per avviare/fermare la dettatura.</p>
+                </div>
+            </div>
+
+            <div class="pt-6 border-t border-gray-800">
+                <button type="submit" class="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-500 hover:to-emerald-500 text-white font-bold rounded-lg shadow-lg transform transition hover:scale-[1.02] focus:scale-95">
+                    Salva e Avvia G-Type
+                </button>
+            </div>
+            
+            <div id="status" class="text-center text-sm font-medium hidden"></div>
+        </form>
+    </div>
+
+    <script>
+        const hotkeyInput = document.getElementById('hotkey');
+
+        hotkeyInput.addEventListener('focus', () => {
+            hotkeyInput.classList.add('border-blue-500', 'ring-2', 'ring-blue-500');
+            hotkeyInput.value = '';
+            hotkeyInput.placeholder = 'Premi i tasti...';
+        });
+
+        hotkeyInput.addEventListener('blur', () => {
+            hotkeyInput.classList.remove('border-blue-500', 'ring-2', 'ring-blue-500');
+            if (hotkeyInput.value === '') {
+                hotkeyInput.value = 'ctrl+shift+space';
+            }
+        });
+
+        hotkeyInput.addEventListener('keydown', (e) => {
+            e.preventDefault();
+            let keys = [];
+            if (e.ctrlKey) keys.push('ctrl');
+            if (e.shiftKey) keys.push('shift');
+            if (e.altKey) keys.push('alt');
+            if (e.metaKey) keys.push('super');
+            
+            let key = e.key.toLowerCase();
+            if (key === ' ') key = 'space';
+            
+            if (!['control', 'shift', 'alt', 'meta'].includes(key)) {
+                keys.push(key);
+                hotkeyInput.value = keys.join('+');
+                hotkeyInput.blur();
+            } else {
+                hotkeyInput.value = keys.join('+');
+            }
+        });
+
+        document.getElementById('setupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.querySelector('button[type="submit"]');
+            const status = document.getElementById('status');
+            
+            btn.disabled = true;
+            btn.innerHTML = 'Salvataggio in corso...';
+            
+            const payload = {
+                api_key: document.getElementById('api_key').value,
+                model: document.getElementById('model').value,
+                hotkey: document.getElementById('hotkey').value
+            };
+
+            try {
+                const res = await fetch('/setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (res.ok) {
+                    status.className = 'text-center text-sm font-medium text-emerald-400 mt-4';
+                    status.innerText = 'Configurazione salvata con successo. Il demone si sta avviando...';
+                    status.classList.remove('hidden');
+                    setTimeout(() => window.location.href = '/', 2000);
+                } else {
+                    throw new Error('Errore di salvataggio');
+                }
+            } catch (err) {
+                status.className = 'text-center text-sm font-medium text-red-500 mt-4';
+                status.innerText = 'Errore durante il salvataggio.';
+                status.classList.remove('hidden');
+                btn.disabled = false;
+                btn.innerHTML = 'Riprova';
+            }
+        });
+    </script>
+</body>
+</html>
