@@ -149,7 +149,7 @@ fn build_request_body(wav_b64: &str, language: &str) -> Value {
                 }
             ]
         }],
-        "generationConfigV2": {
+        "generationConfig": {
             "temperature": 0.0,
             "maxOutputTokens": 4096
         }
@@ -310,7 +310,7 @@ mod tests {
             body["contents"][0]["parts"][1]["inlineData"]["data"],
             "dGVzdA=="
         );
-        assert_eq!(body["generationConfigV2"]["temperature"], 0.0);
+        assert_eq!(body["generationConfig"]["temperature"], 0.0);
     }
 
     #[test]

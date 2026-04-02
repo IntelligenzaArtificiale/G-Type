@@ -71,4 +71,5 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
-panic = "abort"
+# panic = "abort" rimosso: il GUI thread usa catch_unwind per sopravvivere a
+# crash di wry/tray-icon senza abbattere il daemon HTTP + FSM sottostante.

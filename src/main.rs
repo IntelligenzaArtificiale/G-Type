@@ -305,125 +305,148 @@ fn main() -> Result<()> {
         "Configuration loaded"
     );
 
-    // ANTIREX: We split the thread models here!
-    // -> OS Thread: winit event loop (required for GUI components like UI floating pill)
-    // -> Spawned Thread: tokio background runtime (Settings API, audio logic, hotkeys)
+    // ── Thread Architecture ────────────────────────────────────────────────
+    // Main thread  : winit event loop (tray + overlay). EventLoop is !Send
+    //                on Linux (contains X11 raw pointers) — MUST stay here.
+    // Background   : tokio runtime (HTTP server + FSM). Runs on a spawned
+    //                OS thread so the event loop can block the main thread.
+    // ──────────────────────────────────────────────────────────────────────
 
     #[cfg(target_os = "linux")]
     if let Err(e) = gtk::init() {
         warn!("Failed to initialize GTK: {:?}", e);
     }
 
-    // Set up cross-thread communication for Winit <-> Tokio
+    // Cross-thread channel: GUI → daemon (UiCommand)
     let (ui_tx, ui_rx) = std::sync::mpsc::channel::<ui_bridge::UiCommand>();
 
-    // Create the native OS Main Window loop (Winit)
+    // Build the winit event loop on the main thread (mandatory — !Send on Linux).
     use winit::event_loop::ControlFlow;
-    let event_loop = winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>::with_user_event().build().unwrap();
+    let event_loop = match winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>::with_user_event().build() {
+        Ok(el) => el,
+        Err(e) => {
+            warn!("Could not create GUI event loop: {} — daemon runs without overlay/tray", e);
+            // Build a throw-away proxy synchronously (EventLoop is !Send — must
+            // NOT be created inside an async block or moved to another thread).
+            let dummy_proxy = winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>
+                ::with_user_event().build().unwrap().create_proxy();
+            // Block main thread on the FSM; HTTP server is already spawned above.
+            let _ = rt.block_on(app::run_with_ui(cfg, dummy_proxy, ui_rx));
+            return Ok(());
+        }
+    };
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let ui_proxy = event_loop.create_proxy();
 
-    // Spawn Background Daemon Thread
-    std::thread::spawn(move || {
-        rt.block_on(async move {
-            if let Err(e) = app::run_with_ui(cfg, ui_proxy, ui_rx).await {
-                error!(%e, "Fatal error in main tokio loop");
-                eprintln!("\n❌ Fatal: {e}\n");
-                std::process::exit(1);
-            }
-        });
-    });
-
-    // Managers are owned by the closure (no static mut, no unsafe).
-    // They are initialized once on the first event loop tick.
-    let mut tray_mgr:    Option<tray::TrayManager>    = None;
-    let mut overlay_mgr: Option<overlay::OverlayManager> = None;
-
-    #[allow(deprecated)]
-    let _ = event_loop.run(move |event, elwt| {
-        use winit::event::{Event, StartCause, WindowEvent};
-        use crate::ui_bridge::{DaemonEvent, DaemonState};
-
-        match event {
-            // NewEvents(Init) fires first on all desktop platforms.
-            // Resumed fires on macOS/Android lifecycle; we handle both for safety.
-            Event::NewEvents(StartCause::Init) | Event::Resumed => {
-                if tray_mgr.is_none() {
-                    match tray::TrayManager::new(ui_tx.clone()) {
-                        Ok(tm)  => { info!("Tray icon initialized"); tray_mgr = Some(tm); }
-                        Err(e)  => error!("TrayManager init failed: {}", e),
-                    }
-                }
-
-                if overlay_mgr.is_none() {
-                    let attrs = winit::window::Window::default_attributes()
-                        .with_title("G-Type Overlay")
-                        .with_inner_size(winit::dpi::LogicalSize::new(320.0_f64, 56.0_f64))
-                        .with_decorations(false)
-                        .with_transparent(true)
-                        .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
-                        .with_resizable(false)
-                        .with_visible(true); // always live; pill hides via CSS + cursor_hittest(false)
-
-                    match elwt.create_window(attrs) {
-                        Ok(window) => {
-                            // Pass ownership of `window` into OverlayManager so it is never dropped.
-                            match overlay::OverlayManager::new(window, ui_tx.clone()) {
-                                Ok(om)  => { info!("Overlay initialized"); overlay_mgr = Some(om); }
-                                Err(e)  => error!("OverlayManager init failed: {}", e),
-                            }
-                        }
-                        Err(e) => error!("Overlay window creation failed: {}", e),
-                    }
-                }
-            }
-
-            Event::AboutToWait => {
-                // Pump the GTK event loop so tray-icon renders on Linux.
-                // Without this, the StatusNotifier/AppIndicator tray item never appears.
-                #[cfg(target_os = "linux")]
-                while gtk::events_pending() {
-                    gtk::main_iteration_do(false);
-                }
-            }
-
-            Event::UserEvent(daemon_event) => {
-                match daemon_event {
-                    DaemonEvent::StateChanged(state) => {
-                        match state {
-                            DaemonState::Idle => {
-                                if let Some(t) = &tray_mgr    { t.set_idle(); }
-                                if let Some(o) = &overlay_mgr { let _ = o.set_idle(); }
-                            }
-                            DaemonState::Recording { profile } => {
-                                if let Some(t) = &tray_mgr    { t.set_recording(&profile); }
-                                if let Some(o) = &overlay_mgr { let _ = o.set_recording(); }
-                            }
-                            DaemonState::Processing { profile: _ } => {
-                                if let Some(t) = &tray_mgr    { t.set_processing(); }
-                                if let Some(o) = &overlay_mgr { let _ = o.set_processing(); }
-                            }
-                        }
-                    }
-                    DaemonEvent::ProfileActivated(_) => {}
-                    DaemonEvent::ProfilesUpdated(_)  => {}
-                    DaemonEvent::Error(err) => {
-                        error!("UI error: {}", err);
-                    }
-                    DaemonEvent::Quit => {
-                        elwt.exit();
-                    }
-                }
-            }
-
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                elwt.exit();
-            }
-
-            _ => {}
+    // Spawn the app FSM as a tokio task.
+    rt.spawn(async move {
+        if let Err(e) = app::run_with_ui(cfg, ui_proxy, ui_rx).await {
+            error!(%e, "Fatal daemon error");
+            std::process::exit(1);
         }
     });
+
+    // Move the tokio runtime to a background thread so it keeps running
+    // while the winit event loop blocks the main thread below.
+    std::thread::Builder::new()
+        .name("g-type-rt".into())
+        .spawn(move || {
+            rt.block_on(std::future::pending::<()>());
+        })
+        .expect("failed to spawn tokio runtime thread");
+
+    // ── GUI event loop (main thread, blocking) ─────────────────────────────
+    // Wrapped in catch_unwind so a wry/tray-icon/WebKitGTK panic does NOT
+    // kill the process — the tokio background thread keeps running.
+    let ui_tx_gui = ui_tx;
+    let mut tray_mgr:    Option<tray::TrayManager>       = None;
+    let mut overlay_mgr: Option<overlay::OverlayManager> = None;
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[allow(deprecated)]
+        let _ = event_loop.run(move |event, elwt| {
+            use winit::event::{Event, StartCause, WindowEvent};
+            use crate::ui_bridge::{DaemonEvent, DaemonState};
+
+            match event {
+                Event::NewEvents(StartCause::Init) | Event::Resumed => {
+                    if tray_mgr.is_none() {
+                        match tray::TrayManager::new(ui_tx_gui.clone()) {
+                            Ok(tm)  => { info!("Tray icon initialized"); tray_mgr = Some(tm); }
+                            Err(e)  => error!("TrayManager init failed: {}", e),
+                        }
+                    }
+                    if overlay_mgr.is_none() {
+                        let attrs = winit::window::Window::default_attributes()
+                            .with_title("G-Type Overlay")
+                            .with_inner_size(winit::dpi::LogicalSize::new(320.0_f64, 56.0_f64))
+                            .with_decorations(false)
+                            .with_transparent(true)
+                            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+                            .with_resizable(false)
+                            .with_visible(true);
+                        match elwt.create_window(attrs) {
+                            Ok(window) => {
+                                match overlay::OverlayManager::new(window, ui_tx_gui.clone()) {
+                                    Ok(om)  => { info!("Overlay initialized"); overlay_mgr = Some(om); }
+                                    Err(e)  => error!("OverlayManager init failed: {}", e),
+                                }
+                            }
+                            Err(e) => error!("Overlay window creation failed: {}", e),
+                        }
+                    }
+                }
+
+                Event::AboutToWait => {
+                    // Pump GTK so tray-icon renders on Linux.
+                    #[cfg(target_os = "linux")]
+                    while gtk::events_pending() {
+                        gtk::main_iteration_do(false);
+                    }
+                }
+
+                Event::UserEvent(daemon_event) => {
+                    match daemon_event {
+                        DaemonEvent::StateChanged(state) => {
+                            match state {
+                                DaemonState::Idle => {
+                                    if let Some(t) = &tray_mgr    { t.set_idle(); }
+                                    if let Some(o) = &overlay_mgr { let _ = o.set_idle(); }
+                                }
+                                DaemonState::Recording { profile } => {
+                                    if let Some(t) = &tray_mgr    { t.set_recording(&profile); }
+                                    if let Some(o) = &overlay_mgr { let _ = o.set_recording(); }
+                                }
+                                DaemonState::Processing { profile: _ } => {
+                                    if let Some(t) = &tray_mgr    { t.set_processing(); }
+                                    if let Some(o) = &overlay_mgr { let _ = o.set_processing(); }
+                                }
+                            }
+                        }
+                        DaemonEvent::ProfileActivated(_) => {}
+                        DaemonEvent::ProfilesUpdated(_)  => {}
+                        DaemonEvent::Error(err) => {
+                            error!("UI error: {}", err);
+                        }
+                        DaemonEvent::Quit => {
+                            elwt.exit();
+                        }
+                    }
+                }
+
+                Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                    elwt.exit();
+                }
+
+                _ => {}
+            }
+        });
+    }));
+
+    // If the event loop exits or panics, the tokio runtime thread keeps the
+    // process alive. Park main thread indefinitely.
+    std::thread::park();
 
     Ok(())
 }
