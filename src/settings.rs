@@ -43,7 +43,7 @@ pub async fn start_server_with_listener(
         .route("/api/history",           get(api_history))
         .route("/api/open_config",       post(api_open_config))
         .route("/api/profiles",          post(api_create_profile))
-        .route("/api/profiles/:name",    delete(api_delete_profile))
+        .route("/api/profiles/{name}",    delete(api_delete_profile))
         .with_state(state);
 
     tracing::info!("Settings server: http://{}", listener.local_addr()?);
