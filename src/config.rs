@@ -65,6 +65,10 @@ pub struct Profile {
     pub timeout_secs: u64,
     #[serde(default)]
     pub transforms: Vec<TransformConfig>,
+    /// Optional system prompt injected into the transcription request.
+    /// Overrides the default transcription prompt when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_prompt: Option<String>,
 }
 
 impl Default for Profile {
@@ -76,6 +80,7 @@ impl Default for Profile {
             model: default_model(),
             timeout_secs: default_timeout_secs(),
             transforms: vec![],
+            custom_prompt: None,
         }
     }
 }

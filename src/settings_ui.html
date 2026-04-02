@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it" class="dark">
+<html lang="it">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,215 +7,392 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
-    darkMode: 'class',
-    theme: { extend: { colors: { gray: { 950: '#0a0a0a' } } } }
+    theme: {
+      extend: {
+        colors: {
+          surface: '#111111',
+          card:    '#1a1a1a',
+          border:  '#2a2a2a',
+        }
+      }
+    }
   }
 </script>
 <style>
-  .fade-in { animation: fadeIn 0.2s ease; }
-  @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
-  .toast { position:fixed; bottom:24px; right:24px; z-index:100; transition: opacity 0.3s; }
-  .toast.hide { opacity:0; pointer-events:none; }
+  body { background: #0a0a0a; color: #f0f0f0; }
+
+  .card {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 14px;
+    padding: 20px;
+  }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    padding: 2px 8px; border-radius: 999px; text-transform: uppercase;
+  }
+  .badge-ok  { background: rgba(34,197,94,.15);  color: #4ade80; border: 1px solid rgba(34,197,94,.25); }
+  .badge-err { background: rgba(239,68,68,.15);  color: #f87171; border: 1px solid rgba(239,68,68,.25); }
+
+  input, select, textarea {
+    background: #111; border: 1px solid #333; color: #f0f0f0;
+    border-radius: 8px; padding: 8px 12px; font-size: 14px;
+    outline: none; transition: border-color .15s;
+    width: 100%;
+  }
+  input:focus, select:focus, textarea:focus { border-color: #3b82f6; }
+  textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+
+  .btn-primary {
+    background: #2563eb; color: #fff; border: none;
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: background .15s;
+  }
+  .btn-primary:hover { background: #1d4ed8; }
+
+  .btn-ghost {
+    background: #222; color: #ccc; border: 1px solid #333;
+    border-radius: 8px; padding: 8px 14px; font-size: 13px;
+    cursor: pointer; transition: background .15s;
+  }
+  .btn-ghost:hover { background: #2a2a2a; color: #fff; }
+
+  .btn-danger {
+    background: transparent; color: #666; border: none;
+    border-radius: 6px; padding: 4px 8px; font-size: 12px;
+    cursor: pointer; transition: color .15s, background .15s;
+  }
+  .btn-danger:hover { color: #f87171; background: rgba(239,68,68,.1); }
+
+  /* History */
+  .hist-item {
+    background: #161616; border: 1px solid #252525;
+    border-radius: 10px; padding: 14px 16px;
+    transition: border-color .15s;
+  }
+  .hist-item:hover { border-color: #3a3a3a; }
+
+  /* Toast */
+  #toast {
+    position: fixed; bottom: 24px; right: 24px; z-index: 999;
+    transition: opacity .25s, transform .25s;
+  }
+  #toast.hide { opacity: 0; transform: translateY(6px); pointer-events: none; }
+  #toast-msg {
+    background: #1e1e1e; border: 1px solid #333;
+    border-radius: 10px; padding: 12px 18px;
+    font-size: 13px; font-weight: 500;
+    box-shadow: 0 8px 24px rgba(0,0,0,.6);
+  }
+
+  /* Pagination */
+  .pager-btn {
+    background: #1a1a1a; border: 1px solid #2a2a2a;
+    color: #ccc; border-radius: 7px; padding: 5px 13px;
+    font-size: 13px; cursor: pointer; transition: background .15s;
+  }
+  .pager-btn:hover:not(:disabled) { background: #252525; color: #fff; }
+  .pager-btn:disabled { opacity: .35; cursor: default; }
+
+  /* Profile card */
+  .profile-card {
+    background: #111; border: 1px solid #2a2a2a;
+    border-radius: 10px; padding: 14px 16px;
+  }
+
+  /* Expand form */
+  .expand-form { display: none; }
+  .expand-form.open { display: block; }
+
+  label.field-label {
+    display: block; font-size: 11px; font-weight: 600;
+    color: #888; text-transform: uppercase; letter-spacing: .06em;
+    margin-bottom: 5px;
+  }
 </style>
 </head>
-<body class="bg-gray-950 text-gray-200 font-sans antialiased min-h-screen">
+<body class="min-h-screen font-sans antialiased">
 
-<!-- Toast notification -->
-<div id="toast" class="toast hide">
-  <div class="bg-gray-800 border border-gray-700 rounded-xl px-5 py-3 shadow-2xl text-sm font-medium" id="toast-msg"></div>
+<!-- Toast -->
+<div id="toast" class="hide">
+  <div id="toast-msg"></div>
 </div>
 
-<div class="max-w-5xl mx-auto px-6 py-10">
+<div class="max-w-5xl mx-auto px-5 py-10">
 
   <!-- Header -->
-  <header class="flex flex-wrap justify-between items-start gap-6 mb-10 pb-6 border-b border-gray-800">
+  <header class="flex flex-wrap justify-between items-center gap-6 mb-8 pb-6"
+          style="border-bottom:1px solid #222">
     <div>
-      <h1 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">G-Type</h1>
-      <p class="text-xs text-gray-500 mt-1 tracking-widest uppercase">Antirex Dictation Daemon</p>
+      <h1 class="text-2xl font-bold tracking-tight" style="color:#fff">G-Type</h1>
+      <p class="text-xs mt-0.5" style="color:#555;letter-spacing:.1em;text-transform:uppercase">
+        Antirex Dictation Daemon
+      </p>
     </div>
-    <div class="flex gap-8 text-center">
+    <!-- Stats -->
+    <div class="flex gap-6 text-center">
       <div>
-        <p class="text-2xl font-mono text-emerald-400" id="stat-money">—</p>
-        <p class="text-xs text-gray-500 uppercase tracking-wider mt-1">Costo totale</p>
+        <p class="text-xl font-mono font-bold" id="stat-money" style="color:#34d399">—</p>
+        <p class="text-xs mt-0.5" style="color:#555">Costo totale</p>
       </div>
-      <div class="w-px bg-gray-800"></div>
+      <div style="width:1px;background:#222"></div>
       <div>
-        <p class="text-2xl font-mono text-blue-400" id="stat-time">—</p>
-        <p class="text-xs text-gray-500 uppercase tracking-wider mt-1">Tempo risparmiato</p>
+        <p class="text-xl font-mono font-bold" id="stat-time" style="color:#60a5fa">—</p>
+        <p class="text-xs mt-0.5" style="color:#555">Tempo risparmiato</p>
       </div>
-      <div class="w-px bg-gray-800"></div>
+      <div style="width:1px;background:#222"></div>
       <div>
-        <p class="text-2xl font-mono text-violet-400" id="stat-words">—</p>
-        <p class="text-xs text-gray-500 uppercase tracking-wider mt-1">Parole dettate</p>
+        <p class="text-xl font-mono font-bold" id="stat-words" style="color:#c084fc">—</p>
+        <p class="text-xs mt-0.5" style="color:#555">Parole dettate</p>
       </div>
     </div>
   </header>
 
   <!-- Two-column layout -->
-  <div class="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-8">
+  <div class="grid gap-6" style="grid-template-columns: 320px 1fr">
 
-    <!-- LEFT: Profile management -->
-    <aside class="space-y-6">
+    <!-- LEFT: Providers + Profiles -->
+    <aside class="space-y-4">
 
-      <!-- Profile list -->
-      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-        <h2 class="text-base font-semibold text-white mb-4">Profili attivi</h2>
-        <div id="profile-list" class="space-y-2 mb-4">
-          <p class="text-sm text-gray-500">Caricamento...</p>
+      <!-- Provider status -->
+      <div class="card">
+        <h2 class="text-sm font-semibold mb-3" style="color:#fff">Provider API</h2>
+        <div id="provider-list" class="space-y-2">
+          <p class="text-xs" style="color:#555">Caricamento...</p>
         </div>
-        <button onclick="showCreateForm()" id="btn-add"
-          class="w-full py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition">
-          + Nuovo profilo
-        </button>
       </div>
 
-      <!-- Create profile form (hidden by default) -->
-      <div id="create-form" class="hidden bg-gray-900 border border-blue-800/40 rounded-2xl p-6 fade-in">
-        <h2 class="text-base font-semibold text-white mb-4">Crea profilo</h2>
-        <div class="space-y-4">
+      <!-- Profile list -->
+      <div class="card">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold" style="color:#fff">Profili</h2>
+          <button onclick="showCreateForm()" id="btn-add" class="btn-primary" style="padding:5px 12px;font-size:12px">
+            + Nuovo
+          </button>
+        </div>
+        <div id="profile-list" class="space-y-2">
+          <p class="text-xs" style="color:#555">Caricamento...</p>
+        </div>
+      </div>
+
+      <!-- Create profile form (hidden) -->
+      <div id="create-form" class="card" style="display:none;border-color:#1e3a5f">
+        <h2 class="text-sm font-semibold mb-4" style="color:#fff">Crea profilo</h2>
+        <div class="space-y-3">
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Nome</label>
-            <input id="f-name" type="text" placeholder="es. Email formale"
-              class="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-blue-500 transition">
+            <label class="field-label">Nome</label>
+            <input id="f-name" type="text" placeholder="es. Email formale">
           </div>
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Hotkey</label>
+            <label class="field-label">Hotkey</label>
             <input id="f-hotkey" type="text" placeholder="es. ctrl+shift+e"
-              class="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-blue-500 transition font-mono">
-            <p class="text-xs text-gray-600 mt-1">Formato: ctrl+shift+e, alt+r, …</p>
+                   style="font-family:monospace">
+            <p class="text-xs mt-1" style="color:#555">Formato: ctrl+shift+e, alt+r, …</p>
           </div>
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Modello</label>
-            <select id="f-model"
-              class="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-blue-500 transition">
+            <label class="field-label">Modello</label>
+            <select id="f-model">
               <option value="models/gemini-2.0-flash">gemini-2.0-flash (consigliato)</option>
               <option value="models/gemini-2.5-flash">gemini-2.5-flash</option>
               <option value="models/gemini-2.5-flash-lite">gemini-2.5-flash-lite (economico)</option>
               <option value="models/gemini-2.5-pro">gemini-2.5-pro (qualità massima)</option>
             </select>
           </div>
-          <div class="flex gap-3 pt-2">
-            <button onclick="createProfile()"
-              class="flex-1 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition">
-              Crea
-            </button>
-            <button onclick="hideCreateForm()"
-              class="flex-1 py-2 text-sm font-medium rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition">
-              Annulla
-            </button>
+          <div>
+            <label class="field-label">Prompt personalizzato <span style="color:#555;font-weight:400;text-transform:none;letter-spacing:0">(opzionale)</span></label>
+            <textarea id="f-prompt"
+              placeholder="Es: Trascrivi in italiano formale. Aggiungi punteggiatura corretta. Non includere intercalari."></textarea>
+            <p class="text-xs mt-1" style="color:#555">Sostituisce il prompt di trascrizione di default per questo profilo.</p>
+          </div>
+          <div class="flex gap-2 pt-1">
+            <button onclick="createProfile()" class="btn-primary" style="flex:1">Crea</button>
+            <button onclick="hideCreateForm()" class="btn-ghost" style="flex:1">Annulla</button>
           </div>
         </div>
       </div>
 
-      <!-- Open config.toml -->
-      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-5">
-        <p class="text-xs text-gray-500 mb-3">Modifiche avanzate (transforms, lingua, …)</p>
-        <button onclick="openToml()"
-          class="w-full py-2 text-sm font-medium rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition">
-          Apri config.toml
-        </button>
-      </div>
-
     </aside>
 
-    <!-- RIGHT: Transcription history -->
-    <section class="bg-gray-900 border border-gray-800 rounded-2xl p-6 min-h-[400px]">
-      <div class="flex items-center justify-between mb-5">
-        <h2 class="text-base font-semibold text-white">Cronologia trascrizioni</h2>
-        <span class="text-xs text-gray-500" id="history-count"></span>
+    <!-- RIGHT: History -->
+    <section class="card" style="padding:20px;min-height:400px;display:flex;flex-direction:column">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold" style="color:#fff">Cronologia trascrizioni</h2>
+        <span id="history-count" class="text-xs" style="color:#555"></span>
       </div>
 
-      <div id="history-empty" class="hidden text-center py-16 text-gray-600 text-sm">
-        Nessuna trascrizione ancora. Premi il tuo hotkey per dettare.
+      <div id="history-empty" style="display:none;flex:1;display:flex;align-items:center;justify-content:center">
+        <p class="text-sm text-center" style="color:#444">
+          Nessuna trascrizione ancora.<br>Premi il tuo hotkey per dettare.
+        </p>
       </div>
 
-      <div id="history-list" class="space-y-3">
-        <p class="text-sm text-gray-500">Caricamento...</p>
+      <div id="history-list" class="space-y-2" style="flex:1">
+        <p class="text-xs" style="color:#555">Caricamento...</p>
+      </div>
+
+      <!-- Pagination -->
+      <div id="pagination" class="flex items-center justify-between mt-4 pt-4"
+           style="border-top:1px solid #222;display:none">
+        <button id="btn-prev" class="pager-btn" onclick="changePage(-1)">← Precedente</button>
+        <span id="page-info" class="text-xs" style="color:#666"></span>
+        <button id="btn-next" class="pager-btn" onclick="changePage(1)">Successiva →</button>
       </div>
     </section>
 
-  </div><!-- end grid -->
-</div><!-- end container -->
+  </div>
+</div>
 
 <script>
-// ── State ────────────────────────────────────────────────────
-var appConfig = null;
+// ── State ─────────────────────────────────────────────────────
+var appConfig   = null;
+var allRecords  = [];
+var currentPage = 0;
+var PAGE_SIZE   = 20;
 
-// ── Boot ─────────────────────────────────────────────────────
+// ── Boot ──────────────────────────────────────────────────────
 (async function init() {
   await Promise.all([loadState(), loadHistory()]);
 })();
 
-// ── /api/state ───────────────────────────────────────────────
+// ── /api/state ────────────────────────────────────────────────
 async function loadState() {
   try {
     var res  = await fetch('/api/state');
     var data = await res.json();
     appConfig = data.config;
 
-    // Stats
     var s = data.stats || {};
-    document.getElementById('stat-money').textContent =
-      '$' + (s.total_cost_usd || 0).toFixed(4);
-    document.getElementById('stat-time').textContent =
-      formatDuration(s.time_saved_secs || 0);
-    document.getElementById('stat-words').textContent =
-      (s.total_words || 0).toLocaleString('it');
+    document.getElementById('stat-money').textContent = '$' + (s.total_cost_usd || 0).toFixed(4);
+    document.getElementById('stat-time').textContent  = formatDur(s.time_saved_secs || 0);
+    document.getElementById('stat-words').textContent = (s.total_words || 0).toLocaleString('it');
 
+    renderProviders(appConfig.keys || {});
     renderProfiles(appConfig.profiles || []);
-  } catch(e) {
-    console.error('loadState failed:', e);
-  }
+  } catch(e) { console.error('loadState failed:', e); }
 }
 
-// ── Profile rendering ─────────────────────────────────────────
-function renderProfiles(profiles) {
-  var el = document.getElementById('profile-list');
-  if (!profiles.length) {
-    el.innerHTML = '<p class="text-sm text-gray-500">Nessun profilo.</p>';
-    return;
-  }
-  el.innerHTML = profiles.map(function(p) {
-    var modelShort = (p.model || '').replace('models/', '');
-    var canDelete  = profiles.length > 1;
-    return '<div class="flex items-start justify-between gap-3 bg-gray-800/50 rounded-xl px-4 py-3">' +
-      '<div class="min-w-0">' +
-        '<p class="text-sm font-medium text-white truncate">' + esc(p.name) + '</p>' +
-        '<p class="text-xs text-gray-500 mt-0.5 font-mono">' + esc(p.hotkey) + '</p>' +
-        '<p class="text-xs text-gray-600 mt-0.5">' + esc(modelShort) + '</p>' +
-      '</div>' +
-      (canDelete
-        ? '<button onclick="deleteProfile(' + JSON.stringify(p.name) + ')" ' +
-            'class="shrink-0 text-xs text-gray-600 hover:text-red-400 transition px-2 py-1 rounded hover:bg-red-400/10">' +
-            'Elimina</button>'
-        : '') +
+// ── Provider status ───────────────────────────────────────────
+function renderProviders(keys) {
+  var el  = document.getElementById('provider-list');
+  var providers = [
+    { id: 'gemini', label: 'Google Gemini' },
+  ];
+  el.innerHTML = providers.map(function(p) {
+    var ok = !!(keys[p.id] && keys[p.id].length > 4);
+    return '<div class="flex items-center justify-between">' +
+      '<span class="text-sm" style="color:#ddd">' + esc(p.label) + '</span>' +
+      '<span class="badge ' + (ok ? 'badge-ok' : 'badge-err') + '">' +
+        (ok ? '✓ attivo' : '✗ mancante') +
+      '</span>' +
     '</div>';
   }).join('');
 }
 
-// ── Create profile ────────────────────────────────────────────
+// ── Profile rendering ─────────────────────────────────────────
+function renderProfiles(profiles) {
+  var el     = document.getElementById('profile-list');
+  var keys   = (appConfig && appConfig.keys) ? appConfig.keys : {};
+  if (!profiles.length) {
+    el.innerHTML = '<p class="text-xs" style="color:#555">Nessun profilo.</p>';
+    return;
+  }
+  el.innerHTML = profiles.map(function(p, i) {
+    var modelShort  = (p.model || '').replace('models/', '');
+    var canDelete   = profiles.length > 1;
+    var hasKey      = !!(keys[p.provider] && keys[p.provider].length > 4);
+    var promptSnip  = p.custom_prompt ? p.custom_prompt.slice(0, 60) + (p.custom_prompt.length > 60 ? '…' : '') : null;
+    var formId      = 'prompt-form-' + i;
+
+    return '<div class="profile-card">' +
+      '<div class="flex items-start justify-between gap-2">' +
+        '<div class="min-w-0 flex-1">' +
+          '<div class="flex items-center gap-2">' +
+            '<p class="text-sm font-semibold truncate" style="color:#f0f0f0">' + esc(p.name) + '</p>' +
+            (hasKey ? '' : '<span class="badge badge-err" style="font-size:9px">no key</span>') +
+          '</div>' +
+          '<p class="text-xs mt-0.5" style="color:#888;font-family:monospace">' + esc(p.hotkey) + '</p>' +
+          '<p class="text-xs" style="color:#555">' + esc(modelShort) + '</p>' +
+        '</div>' +
+        '<div class="flex items-center gap-1 shrink-0">' +
+          '<button onclick="togglePromptForm(' + JSON.stringify(formId) + ')" ' +
+            'class="btn-ghost" style="padding:3px 8px;font-size:11px" title="Prompt personalizzato">✎</button>' +
+          (canDelete ? '<button onclick="deleteProfile(' + JSON.stringify(p.name) + ')" class="btn-danger">✕</button>' : '') +
+        '</div>' +
+      '</div>' +
+      // Inline prompt editor
+      '<div id="' + formId + '" class="expand-form" style="margin-top:10px;padding-top:10px;border-top:1px solid #2a2a2a">' +
+        '<label class="field-label">Prompt personalizzato</label>' +
+        '<textarea id="' + formId + '-txt" placeholder="Lascia vuoto per usare il prompt di default...">' +
+          esc(p.custom_prompt || '') +
+        '</textarea>' +
+        '<div class="flex gap-2 mt-2">' +
+          '<button onclick="savePrompt(' + JSON.stringify(p.name) + ',' + JSON.stringify(formId) + ')" ' +
+            'class="btn-primary" style="font-size:12px;padding:5px 12px">Salva</button>' +
+          '<button onclick="togglePromptForm(' + JSON.stringify(formId) + ')" ' +
+            'class="btn-ghost" style="font-size:12px;padding:5px 10px">Annulla</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function togglePromptForm(id) {
+  var el = document.getElementById(id);
+  if (el) el.classList.toggle('open');
+}
+
+async function savePrompt(profileName, formId) {
+  var txt = document.getElementById(formId + '-txt');
+  var custom_prompt = txt ? txt.value.trim() : '';
+  try {
+    var res = await fetch('/api/profiles/' + encodeURIComponent(profileName), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ custom_prompt: custom_prompt || null })
+    });
+    if (!res.ok) { toast('Errore salvataggio', true); return; }
+    toast('Prompt salvato. Riavvia G-Type per applicarlo.');
+    await loadState();
+  } catch(e) { toast('Errore di rete', true); }
+}
+
+// ── Create profile ─────────────────────────────────────────────
 function showCreateForm() {
-  document.getElementById('create-form').classList.remove('hidden');
+  var keys = (appConfig && appConfig.keys) ? appConfig.keys : {};
+  var hasAnyKey = Object.values(keys).some(function(v) { return v && v.length > 4; });
+  if (!hasAnyKey) {
+    toast('Configura prima una chiave API nella sezione Provider.', true);
+    return;
+  }
+  document.getElementById('create-form').style.display = 'block';
   document.getElementById('f-name').focus();
 }
+
 function hideCreateForm() {
-  document.getElementById('create-form').classList.add('hidden');
-  document.getElementById('f-name').value    = '';
-  document.getElementById('f-hotkey').value  = '';
+  document.getElementById('create-form').style.display = 'none';
+  document.getElementById('f-name').value   = '';
+  document.getElementById('f-hotkey').value = '';
+  document.getElementById('f-prompt').value = '';
 }
 
 async function createProfile() {
   var name   = document.getElementById('f-name').value.trim();
   var hotkey = document.getElementById('f-hotkey').value.trim();
   var model  = document.getElementById('f-model').value;
+  var prompt = document.getElementById('f-prompt').value.trim();
 
   if (!name || !hotkey) { toast('Nome e hotkey sono obbligatori', true); return; }
 
   try {
-    var res = await fetch('/api/profiles', {
+    var body = { name, hotkey, model, provider: 'gemini' };
+    if (prompt) body.custom_prompt = prompt;
+
+    var res  = await fetch('/api/profiles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, hotkey, model, provider: 'gemini' })
+      body: JSON.stringify(body)
     });
     var data = await res.json();
     if (!res.ok) { toast(data.error || 'Errore', true); return; }
@@ -226,81 +403,105 @@ async function createProfile() {
   } catch(e) { toast('Errore di rete', true); }
 }
 
-// ── Delete profile ────────────────────────────────────────────
+// ── Delete profile ─────────────────────────────────────────────
 async function deleteProfile(name) {
   if (!confirm('Eliminare il profilo "' + name + '"?')) return;
   try {
     var res  = await fetch('/api/profiles/' + encodeURIComponent(name), { method: 'DELETE' });
     var data = await res.json();
     if (!res.ok) { toast(data.error || 'Errore', true); return; }
-
     toast('Profilo eliminato. Riavvia G-Type per applicare.');
     await loadState();
   } catch(e) { toast('Errore di rete', true); }
 }
 
-// ── /api/history ─────────────────────────────────────────────
+// ── History ────────────────────────────────────────────────────
 async function loadHistory() {
   try {
-    var res     = await fetch('/api/history');
-    var records = await res.json();
-
-    var listEl  = document.getElementById('history-list');
-    var emptyEl = document.getElementById('history-empty');
-    var countEl = document.getElementById('history-count');
-
-    if (!records || !records.length) {
-      listEl.innerHTML = '';
-      emptyEl.classList.remove('hidden');
-      countEl.textContent = '';
-      return;
-    }
-
-    countEl.textContent = records.length + ' registrazioni';
-    emptyEl.classList.add('hidden');
-
-    listEl.innerHTML = records.map(function(r, i) {
-      var dateStr  = r.timestamp ? r.timestamp.replace('T', ' ').replace('Z', ' UTC') : '';
-      var dur      = r.audio_duration_secs ? r.audio_duration_secs.toFixed(1) + 's' : '';
-      var cost     = r.total_cost_usd ? '$' + r.total_cost_usd.toFixed(5) : '$0';
-      var words    = r.word_count || 0;
-      var textFull = r.text || '';
-      var textPrev = textFull.length > 120 ? textFull.slice(0, 120) + '…' : textFull;
-      var modelS   = (r.model || '').replace('models/', '');
-      var id       = 'rec-' + i;
-
-      return '<div class="border border-gray-800 rounded-xl p-4 hover:border-gray-700 transition fade-in">' +
-        '<div class="flex flex-wrap justify-between items-start gap-2 mb-2">' +
-          '<div class="flex items-center gap-3 text-xs text-gray-500">' +
-            '<span>' + esc(dateStr) + '</span>' +
-            '<span class="text-gray-700">·</span>' +
-            '<span>' + esc(dur) + '</span>' +
-            '<span class="text-gray-700">·</span>' +
-            '<span>' + words + ' parole</span>' +
-            '<span class="text-gray-700">·</span>' +
-            '<span class="text-gray-600">' + esc(modelS) + '</span>' +
-          '</div>' +
-          '<div class="flex items-center gap-2">' +
-            '<span class="text-xs text-gray-600">' + esc(cost) + '</span>' +
-            '<button onclick="copyText(' + JSON.stringify(textFull) + ', this)" ' +
-              'class="text-xs text-gray-500 hover:text-white border border-gray-700 hover:border-gray-500 rounded px-2 py-0.5 transition">' +
-              'Copia</button>' +
-          '</div>' +
-        '</div>' +
-        '<p id="' + id + '" class="text-sm text-gray-300 leading-relaxed">' + esc(textPrev) + '</p>' +
-        (textFull.length > 120
-          ? '<button onclick="expandText(' + JSON.stringify(id) + ',' + JSON.stringify(textFull) + ',this)" ' +
-              'class="text-xs text-blue-400 hover:text-blue-300 mt-1 transition">Mostra tutto</button>'
-          : '') +
-      '</div>';
-    }).join('');
-
-  } catch(e) {
-    console.error('loadHistory failed:', e);
-  }
+    var res = await fetch('/api/history');
+    allRecords = await res.json() || [];
+    currentPage = 0;
+    renderHistoryPage();
+  } catch(e) { console.error('loadHistory failed:', e); }
 }
 
-// ── Helpers ───────────────────────────────────────────────────
+function renderHistoryPage() {
+  var listEl   = document.getElementById('history-list');
+  var emptyEl  = document.getElementById('history-empty');
+  var countEl  = document.getElementById('history-count');
+  var pagerEl  = document.getElementById('pagination');
+
+  if (!allRecords.length) {
+    listEl.innerHTML = '';
+    emptyEl.style.display = 'flex';
+    pagerEl.style.display = 'none';
+    countEl.textContent  = '';
+    return;
+  }
+
+  emptyEl.style.display = 'none';
+
+  var total  = allRecords.length;
+  var pages  = Math.ceil(total / PAGE_SIZE);
+  var start  = currentPage * PAGE_SIZE;
+  var end    = Math.min(start + PAGE_SIZE, total);
+  var slice  = allRecords.slice(start, end);
+
+  countEl.textContent = total + ' registrazioni';
+
+  // Pagination controls
+  if (pages > 1) {
+    pagerEl.style.display = 'flex';
+    document.getElementById('page-info').textContent =
+      'Pagina ' + (currentPage + 1) + ' di ' + pages;
+    document.getElementById('btn-prev').disabled = currentPage === 0;
+    document.getElementById('btn-next').disabled = currentPage >= pages - 1;
+  } else {
+    pagerEl.style.display = 'none';
+  }
+
+  listEl.innerHTML = slice.map(function(r, i) {
+    var idx      = start + i;
+    var dateStr  = r.timestamp ? r.timestamp.replace('T',' ').replace('Z',' UTC') : '';
+    var dur      = r.audio_duration_secs ? r.audio_duration_secs.toFixed(1) + 's' : '';
+    var cost     = r.total_cost_usd ? '$' + r.total_cost_usd.toFixed(5) : '$0';
+    var words    = r.word_count || 0;
+    var textFull = r.text || '';
+    var textPrev = textFull.length > 140 ? textFull.slice(0, 140) + '…' : textFull;
+    var modelS   = (r.model || '').replace('models/', '');
+    var tid      = 'r' + idx;
+
+    return '<div class="hist-item">' +
+      '<div class="flex flex-wrap justify-between items-center gap-2 mb-2">' +
+        '<div class="flex flex-wrap items-center gap-x-3 gap-y-1">' +
+          '<span class="text-xs" style="color:#888">' + esc(dateStr) + '</span>' +
+          (dur    ? '<span class="text-xs" style="color:#555">' + esc(dur) + '</span>' : '') +
+          '<span class="text-xs" style="color:#555">' + words + ' parole</span>' +
+          (modelS ? '<span class="text-xs" style="color:#444">' + esc(modelS) + '</span>' : '') +
+        '</div>' +
+        '<div class="flex items-center gap-2">' +
+          '<span class="text-xs" style="color:#555">' + esc(cost) + '</span>' +
+          '<button onclick="copyText(' + JSON.stringify(textFull) + ',this)" ' +
+            'class="btn-ghost" style="padding:3px 9px;font-size:11px">Copia</button>' +
+        '</div>' +
+      '</div>' +
+      '<p id="' + tid + '" class="text-sm leading-relaxed" style="color:#d4d4d4">' + esc(textPrev) + '</p>' +
+      (textFull.length > 140
+        ? '<button onclick="expandText(\'' + tid + '\',' + JSON.stringify(textFull) + ',this)" ' +
+            'style="color:#3b82f6;font-size:12px;background:none;border:none;cursor:pointer;margin-top:4px;padding:0">Mostra tutto</button>'
+        : '') +
+    '</div>';
+  }).join('');
+}
+
+function changePage(delta) {
+  var pages = Math.ceil(allRecords.length / PAGE_SIZE);
+  currentPage = Math.max(0, Math.min(pages - 1, currentPage + delta));
+  renderHistoryPage();
+  document.getElementById('history-list').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ── Helpers ────────────────────────────────────────────────────
 function esc(s) {
   return String(s || '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -311,24 +512,18 @@ function copyText(text, btn) {
   navigator.clipboard.writeText(text).then(function() {
     var orig = btn.textContent;
     btn.textContent = 'Copiato!';
-    btn.classList.add('text-emerald-400', 'border-emerald-700');
-    setTimeout(function() {
-      btn.textContent = orig;
-      btn.classList.remove('text-emerald-400', 'border-emerald-700');
-    }, 1500);
+    btn.style.color = '#4ade80';
+    setTimeout(function() { btn.textContent = orig; btn.style.color = ''; }, 1500);
   });
 }
 
 function expandText(id, fullText, btn) {
-  document.getElementById(id).textContent = fullText;
+  var el = document.getElementById(id);
+  if (el) el.textContent = fullText;
   btn.remove();
 }
 
-async function openToml() {
-  await fetch('/api/open_config', { method: 'POST' });
-}
-
-function formatDuration(secs) {
+function formatDur(secs) {
   if (!secs || secs < 60) return Math.floor(secs || 0) + 's';
   if (secs < 3600) return (secs / 60).toFixed(1) + 'min';
   return (secs / 3600).toFixed(1) + 'h';
@@ -336,12 +531,11 @@ function formatDuration(secs) {
 
 var toastTimer = null;
 function toast(msg, isError) {
-  var el  = document.getElementById('toast');
-  var msg_el = document.getElementById('toast-msg');
-  msg_el.textContent = msg;
-  msg_el.className = isError
-    ? 'bg-gray-800 border border-red-800/50 text-red-300 rounded-xl px-5 py-3 shadow-2xl text-sm font-medium'
-    : 'bg-gray-800 border border-emerald-800/50 text-emerald-300 rounded-xl px-5 py-3 shadow-2xl text-sm font-medium';
+  var el    = document.getElementById('toast');
+  var msgEl = document.getElementById('toast-msg');
+  msgEl.textContent = msg;
+  msgEl.style.borderColor = isError ? 'rgba(239,68,68,.4)' : 'rgba(34,197,94,.3)';
+  msgEl.style.color       = isError ? '#f87171'             : '#86efac';
   el.classList.remove('hide');
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(function() { el.classList.add('hide'); }, 3500);

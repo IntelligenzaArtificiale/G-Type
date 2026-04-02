@@ -382,10 +382,9 @@ fn main() -> Result<()> {
                             .with_title("G-Type Overlay")
                             .with_inner_size(winit::dpi::LogicalSize::new(320.0_f64, 56.0_f64))
                             .with_decorations(false)
-                            .with_transparent(true)
                             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
                             .with_resizable(false)
-                            .with_visible(true);
+                            .with_visible(false);
                         match elwt.create_window(attrs) {
                             Ok(window) => {
                                 match overlay::OverlayManager::new(window, ui_tx_gui.clone()) {

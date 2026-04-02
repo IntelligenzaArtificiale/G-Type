@@ -14,7 +14,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse, Json, Redirect},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use serde::Deserialize;
@@ -44,6 +44,7 @@ pub async fn start_server_with_listener(
         .route("/api/open_config",       post(api_open_config))
         .route("/api/profiles",          post(api_create_profile))
         .route("/api/profiles/{name}",    delete(api_delete_profile))
+        .route("/api/profiles/{name}",    put(api_update_profile))
         .with_state(state);
 
     tracing::info!("Settings server: http://{}", listener.local_addr()?);
@@ -141,10 +142,11 @@ async fn api_open_config() -> impl IntoResponse {
 
 #[derive(Deserialize)]
 struct CreateProfilePayload {
-    name:     String,
-    hotkey:   String,
-    model:    String,
-    provider: Option<String>,
+    name:          String,
+    hotkey:        String,
+    model:         String,
+    provider:      Option<String>,
+    custom_prompt: Option<String>,
 }
 
 async fn api_create_profile(
@@ -171,13 +173,18 @@ async fn api_create_profile(
         return (StatusCode::CONFLICT, Json(json!({"error": "This hotkey is already used by another profile"}))).into_response();
     }
 
+    let custom_prompt = payload.custom_prompt
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
     let profile = crate::config::Profile {
-        name:         name.clone(),
-        hotkey:       hotkey,
-        provider:     payload.provider.unwrap_or_else(|| "gemini".to_string()),
-        model:        payload.model,
-        timeout_secs: 10,
-        transforms:   vec![],
+        name:          name.clone(),
+        hotkey,
+        provider:      payload.provider.unwrap_or_else(|| "gemini".to_string()),
+        model:         payload.model,
+        timeout_secs:  10,
+        transforms:    vec![],
+        custom_prompt,
     };
     config.profiles.push(profile);
 
@@ -209,6 +216,35 @@ async fn api_delete_profile(
     match save_config(&config) {
         StatusCode::OK => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
         code           => code.into_response(),
+    }
+}
+
+// ── PUT /api/profiles/:name ──────────────────────────────────
+
+#[derive(Deserialize)]
+struct UpdateProfilePayload {
+    custom_prompt: Option<String>,
+}
+
+async fn api_update_profile(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(payload): Json<UpdateProfilePayload>,
+) -> impl IntoResponse {
+    let mut config = state.config.write().await;
+
+    let profile = config.profiles.iter_mut().find(|p| p.name == name);
+    match profile {
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "Profile not found"}))).into_response(),
+        Some(p) => {
+            p.custom_prompt = payload.custom_prompt
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            match save_config(&config) {
+                StatusCode::OK => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
+                code           => code.into_response(),
+            }
+        }
     }
 }
 
