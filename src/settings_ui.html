@@ -481,17 +481,22 @@ function renderHistoryPage() {
         '</div>' +
         '<div class="flex items-center gap-2">' +
           '<span class="text-xs" style="color:#555">' + esc(cost) + '</span>' +
-          '<button onclick="copyText(' + JSON.stringify(textFull) + ',this)" ' +
+          '<button data-history-action="copy" data-record-index="' + idx + '" ' +
             'class="btn-ghost" style="padding:3px 9px;font-size:11px">Copia</button>' +
         '</div>' +
       '</div>' +
       '<p id="' + tid + '" class="text-sm leading-relaxed" style="color:#d4d4d4">' + esc(textPrev) + '</p>' +
       (textFull.length > 140
-        ? '<button onclick="expandText(\'' + tid + '\',' + JSON.stringify(textFull) + ',this)" ' +
+        ? '<button data-history-action="expand" data-record-index="' + idx + '" data-target-id="' + tid + '" ' +
             'style="color:#3b82f6;font-size:12px;background:none;border:none;cursor:pointer;margin-top:4px;padding:0">Mostra tutto</button>'
         : '') +
     '</div>';
   }).join('');
+
+  if (!listEl.dataset.historyEventsBound) {
+    listEl.addEventListener('click', handleHistoryAction);
+    listEl.dataset.historyEventsBound = '1';
+  }
 }
 
 function changePage(delta) {
@@ -508,12 +513,56 @@ function esc(s) {
     .replace(/"/g,'&quot;');
 }
 
+function handleHistoryAction(ev) {
+  var btn = ev.target.closest('[data-history-action]');
+  if (!btn) return;
+
+  var idx = Number(btn.getAttribute('data-record-index'));
+  var record = Number.isInteger(idx) ? allRecords[idx] : null;
+  if (!record) return;
+
+  var text = record.text || '';
+  var action = btn.getAttribute('data-history-action');
+  if (action === 'copy') {
+    copyText(text, btn);
+  } else if (action === 'expand') {
+    expandText(btn.getAttribute('data-target-id'), text, btn);
+  }
+}
+
 function copyText(text, btn) {
-  navigator.clipboard.writeText(text).then(function() {
+  writeClipboard(text).then(function() {
     var orig = btn.textContent;
     btn.textContent = 'Copiato!';
     btn.style.color = '#4ade80';
     setTimeout(function() { btn.textContent = orig; btn.style.color = ''; }, 1500);
+  }).catch(function(e) {
+    console.error('copyText failed:', e);
+    toast('Copia non riuscita');
+  });
+}
+
+function writeClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+
+  return new Promise(function(resolve, reject) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+
+    try {
+      document.execCommand('copy') ? resolve() : reject(new Error('execCommand copy failed'));
+    } catch (e) {
+      reject(e);
+    } finally {
+      document.body.removeChild(ta);
+    }
   });
 }
 

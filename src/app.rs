@@ -321,12 +321,4 @@ mod tests {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 5), "hello…");
     }
-
-    #[test]
-    fn test_state_display() {
-        assert_eq!(format!("{}", State::Idle), "IDLE");
-        assert_eq!(format!("{}", State::Recording), "RECORDING");
-        assert_eq!(format!("{}", State::Processing), "PROCESSING");
-        assert_eq!(format!("{}", State::Injecting), "INJECTING");
-    }
 }

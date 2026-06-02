@@ -655,6 +655,7 @@ mod tests {
                 total_cost_usd: 0.000124,
                 word_count: 20,
                 char_count: 100,
+                text: "record one".into(),
             },
             TranscriptionRecord {
                 timestamp: "2025-01-15T11:00:00Z".into(),
@@ -667,6 +668,7 @@ mod tests {
                 total_cost_usd: 0.0000732,
                 word_count: 10,
                 char_count: 50,
+                text: "record two".into(),
             },
         ];
         let stats = Stats::from_records(&records);
@@ -722,6 +724,7 @@ mod tests {
                 total_cost_usd: 0.0,
                 word_count: 5,
                 char_count: 20,
+                text: "first record".into(),
             },
             TranscriptionRecord {
                 timestamp: "2025-01-16T10:00:00Z".into(),
@@ -734,6 +737,7 @@ mod tests {
                 total_cost_usd: 0.0,
                 word_count: 5,
                 char_count: 20,
+                text: "second record".into(),
             },
         ];
         let filtered = filter_records_by_date(&records, "2025-01-15");
@@ -753,6 +757,7 @@ mod tests {
             total_cost_usd: 0.0001038,
             word_count: 12,
             char_count: 60,
+            text: "roundtrip record".into(),
         };
 
         let json = serde_json::to_string(&record).unwrap();

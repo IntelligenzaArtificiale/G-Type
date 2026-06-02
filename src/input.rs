@@ -519,8 +519,9 @@ mod tests {
                 .unwrap();
 
             let hotkey = parse_hotkey("ctrl+shift+space").unwrap();
+            let shared_hotkeys = SharedHotkeys::new(vec![(hotkey, "dictation".to_string())]);
             let (tx, mut rx) = mpsc::channel(16);
-            let mut state = HookState::new(tx, hotkey);
+            let mut state = HookState::new(tx, shared_hotkeys);
 
             // Press Ctrl
             state.handle_event(&Event {
@@ -548,7 +549,7 @@ mod tests {
             assert!(state.recording);
 
             let signal = rt.block_on(async { rx.recv().await });
-            assert_eq!(signal, Some(InputSignal::Start));
+            assert_eq!(signal, Some(InputSignal::Start("dictation".to_string())));
 
             // Release Space
             state.handle_event(&Event {
