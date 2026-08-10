@@ -163,11 +163,11 @@ pub fn load() -> Result<ConfigV2> {
     match toml::from_str::<ConfigV1>(&raw) {
         Ok(v1) => {
             let mut v2 = ConfigV2::default();
-            
+
             v2.global.language = v1.language;
             v2.global.sound_enabled = v1.sound_enabled;
             v2.global.currency = v1.currency;
-            
+
             if !v1.api_key.is_empty() && v1.api_key != "YOUR_GEMINI_API_KEY_HERE" {
                 v2.keys.insert("gemini".to_string(), v1.api_key);
             }
@@ -245,6 +245,6 @@ pub fn set_api_key(key: &str) -> Result<()> {
     let mut cfg = load().unwrap_or_default();
     cfg.keys.insert("gemini".to_string(), key.to_string());
     save(&cfg, &path)?;
-    println!("  {} API key updated.", "✔".to_string() /* remove colored */);
+    println!("  ✔ API key updated.");
     Ok(())
 }

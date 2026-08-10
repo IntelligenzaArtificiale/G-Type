@@ -1,5 +1,4 @@
-use anyhow::Result;
-use tracing::{warn, debug};
+use tracing::debug;
 
 use crate::config::TransformConfig;
 
@@ -19,11 +18,14 @@ pub async fn run_pipeline(
                 debug!("Applying Cleanup transform");
                 current_text = apply_cleanup(&current_text);
             }
-            TransformConfig::AiRewrite { prompt: _, context: _, model: _ } => {
+            TransformConfig::AiRewrite {
+                prompt: _,
+                context: _,
+                model: _,
+            } => {
                 debug!("Applying AiRewrite transform (stub)");
                 // To be implemented: API call for rewrite.
-                // If it fails: warn!(%e, "AI Rewrite failed"); (keep current_text)
-                // For now, it's just a pass-through placeholder.
+                // If it fails, keep current_text so user data is never lost.
             }
             TransformConfig::Template { template } => {
                 debug!("Applying Template transform");
@@ -37,15 +39,10 @@ pub async fn run_pipeline(
 
 /// Cleanup common fillers and artifacts.
 fn apply_cleanup(text: &str) -> String {
-    // A simple regex or string replace logic for filler words.
-    // Antirex: keep it simple, avoid massive regex crates if a few replace() work,
-    // though for real fillers a regex might be better. Let's do simple replaces for now.
     let mut cleaned = text.to_string();
-    
-    // Rimuovi spazi multipli
+
+    // Rimuovi spazi multipli.
     cleaned = cleaned.replace("  ", " ");
-    
-    // (In futuro aggiungere la vera estrazione regex dei fillers)
 
     cleaned.trim().to_string()
 }
