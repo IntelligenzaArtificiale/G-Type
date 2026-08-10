@@ -1,31 +1,31 @@
 use anyhow::Result;
-use tray_icon::{Icon, TrayIconBuilder, TrayIcon};
 use muda::{Menu, MenuItem, PredefinedMenuItem};
 use tracing::info;
-use crate::ui_bridge::{ProfileInfo, UiCommand};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+
+use crate::ui_bridge::UiCommand;
 
 pub struct TrayManager {
     pub tray: TrayIcon,
 }
 
 impl TrayManager {
-    pub fn new(ui_tx: std::sync::mpsc::Sender<UiCommand>) -> Result<Self> {
+    pub fn new(_ui_tx: std::sync::mpsc::Sender<UiCommand>) -> Result<Self> {
         let menu = Menu::new();
-        
+
         let settings_i = MenuItem::new("Settings...", true, None);
         let quit_i = MenuItem::new("Quit G-Type", true, None);
-        
+
         menu.append(&settings_i)?;
         menu.append(&PredefinedMenuItem::separator())?;
         menu.append(&quit_i)?;
-        
-        // Crea un icona 16x16 verde scuro per idle
+
         let mut rgba = Vec::with_capacity(16 * 16 * 4);
         for _ in 0..(16 * 16) {
-            rgba.push(20);  // R
-            rgba.push(200); // G
-            rgba.push(20);  // B
-            rgba.push(255); // A
+            rgba.push(20);
+            rgba.push(200);
+            rgba.push(20);
+            rgba.push(255);
         }
         let icon = Icon::from_rgba(rgba, 16, 16)?;
 
@@ -42,24 +42,26 @@ impl TrayManager {
     pub fn set_recording(&self, profile: &str) {
         let mut rgba = Vec::with_capacity(16 * 16 * 4);
         for _ in 0..(16 * 16) {
-            rgba.push(200); // R
-            rgba.push(20);  // G
-            rgba.push(20);  // B
-            rgba.push(255); // A
+            rgba.push(200);
+            rgba.push(20);
+            rgba.push(20);
+            rgba.push(255);
         }
         if let Ok(icon) = Icon::from_rgba(rgba, 16, 16) {
             let _ = self.tray.set_icon(Some(icon));
         }
-        let _ = self.tray.set_tooltip(Some(format!("G-Type: Recording [{}]", profile)));
+        let _ = self
+            .tray
+            .set_tooltip(Some(format!("G-Type: Recording [{}]", profile)));
     }
 
     pub fn set_processing(&self) {
         let mut rgba = Vec::with_capacity(16 * 16 * 4);
         for _ in 0..(16 * 16) {
-            rgba.push(20);  // R
-            rgba.push(20);  // G
-            rgba.push(200); // B
-            rgba.push(255); // A
+            rgba.push(20);
+            rgba.push(20);
+            rgba.push(200);
+            rgba.push(255);
         }
         if let Ok(icon) = Icon::from_rgba(rgba, 16, 16) {
             let _ = self.tray.set_icon(Some(icon));
@@ -70,18 +72,14 @@ impl TrayManager {
     pub fn set_idle(&self) {
         let mut rgba = Vec::with_capacity(16 * 16 * 4);
         for _ in 0..(16 * 16) {
-            rgba.push(20);  // R
-            rgba.push(200); // G
-            rgba.push(20);  // B
-            rgba.push(255); // A
+            rgba.push(20);
+            rgba.push(200);
+            rgba.push(20);
+            rgba.push(255);
         }
         if let Ok(icon) = Icon::from_rgba(rgba, 16, 16) {
             let _ = self.tray.set_icon(Some(icon));
         }
         let _ = self.tray.set_tooltip(Some("G-Type: Ready"));
-    }
-
-    pub fn update_menu(&self, _profiles: &[ProfileInfo]) {
-        // Implement profile toggle updates here in the future
     }
 }
