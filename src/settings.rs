@@ -78,9 +78,11 @@ async fn api_setup(
         profile.model = payload.model;
         profile.hotkey = payload.hotkey.trim().to_string();
     } else {
-        let mut p = crate::config::Profile::default();
-        p.model = payload.model;
-        p.hotkey = payload.hotkey.trim().to_string();
+        let p = crate::config::Profile {
+            model: payload.model,
+            hotkey: payload.hotkey.trim().to_string(),
+            ..crate::config::Profile::default()
+        };
         config.profiles.push(p);
     }
 
