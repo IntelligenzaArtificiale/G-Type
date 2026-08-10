@@ -71,7 +71,7 @@ pub async fn run_with_ui(
     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
 
     let mut last_config_refresh = tokio::time::Instant::now();
-    let mut ui_rx = ui_rx;
+    let ui_rx = ui_rx;
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
