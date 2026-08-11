@@ -215,7 +215,7 @@ pub fn load() -> Result<ConfigV2> {
     }
 }
 
-pub fn save(cfg: &ConfigV2, path: &PathBuf) -> Result<()> {
+pub fn save(cfg: &ConfigV2, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Cannot create config directory {}", parent.display()))?;
