@@ -7,7 +7,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, warn};
+
+static CONFIG_DIRTY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConfigV2 {
@@ -145,6 +148,13 @@ pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
 
+/// Returns true once for every successful config save. This lets the runtime
+/// refresh hotkeys only after a real configuration change instead of polling
+/// and locking the full configuration on a timer.
+pub fn take_runtime_dirty() -> bool {
+    CONFIG_DIRTY.swap(false, Ordering::AcqRel)
+}
+
 fn backup_path(path: &Path) -> PathBuf {
     path.with_extension("toml.bak")
 }
@@ -223,6 +233,7 @@ pub fn save(cfg: &ConfigV2, path: &Path) -> Result<()> {
 
     let content = toml::to_string_pretty(cfg).context("Failed to serialize config")?;
     atomic_write_with_backup(path, content.as_bytes())?;
+    CONFIG_DIRTY.store(true, Ordering::Release);
     Ok(())
 }
 
@@ -357,5 +368,12 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "second");
         assert_eq!(fs::read_to_string(backup_path(&path)).unwrap(), "first");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_dirty_flag_is_edge_triggered() {
+        CONFIG_DIRTY.store(true, Ordering::Release);
+        assert!(take_runtime_dirty());
+        assert!(!take_runtime_dirty());
     }
 }
