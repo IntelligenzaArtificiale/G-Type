@@ -192,13 +192,31 @@ async fn state_recording(
 
     let (audio_tx, audio_rx) = audio::audio_channel();
     let recording_flag = Arc::new(AtomicBool::new(true));
+    let configured_device = config.global.audio_device.clone();
 
     let audio_thread_handle = match audio::start_capture(
-        audio_tx,
+        audio_tx.clone(),
         recording_flag.clone(),
-        config.global.audio_device.clone(),
+        configured_device.clone(),
     ) {
         Ok(handle) => handle,
+        Err(first_error) if configured_device.as_deref().is_some_and(|name| !name.is_empty() && name != "default") => {
+            warn!(
+                device = configured_device.as_deref().unwrap_or_default(),
+                %first_error,
+                "Configured microphone unavailable; falling back to system default"
+            );
+            match audio::start_capture(audio_tx.clone(), recording_flag.clone(), None) {
+                Ok(handle) => handle,
+                Err(fallback_error) => {
+                    error!(%fallback_error, "Failed to start fallback audio capture");
+                    if config.global.sound_enabled {
+                        crate::audio_feedback::play_error_beep();
+                    }
+                    return;
+                }
+            }
+        }
         Err(error) => {
             error!(%error, "Failed to start audio capture");
             if config.global.sound_enabled {
@@ -207,6 +225,7 @@ async fn state_recording(
             return;
         }
     };
+    drop(audio_tx);
 
     let collector_handle = tokio::task::spawn_blocking(move || {
         let mut all_samples = Vec::<i16>::with_capacity(480_000);
