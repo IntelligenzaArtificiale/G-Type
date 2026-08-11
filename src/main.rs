@@ -235,8 +235,6 @@ fn main() -> Result<()> {
 
             #[cfg(target_os = "linux")]
             {
-                // A SIGSTOP/Ctrl+Z process still owns the socket: SO_REUSEADDR cannot
-                // steal it. fuser can terminate the stale same-user process safely.
                 match std::process::Command::new("fuser")
                     .args(["-k", "9741/tcp"])
                     .status()
@@ -281,7 +279,7 @@ fn main() -> Result<()> {
         });
     }
 
-    let p0 = cfg.profiles.get(0).expect("At least 1 profile must exist");
+    let p0 = cfg.profiles.first().expect("At least 1 profile must exist");
     debug!(model = %p0.model, hotkey = %p0.hotkey, "Configuration loaded");
 
     #[cfg(target_os = "linux")]
@@ -322,19 +320,17 @@ fn main() -> Result<()> {
     let mut tray_mgr: Option<tray::TrayManager> = None;
     let mut overlay_mgr: Option<overlay::OverlayManager> = None;
 
-    // wry/webkit2gtk can trigger GLXBadWindow on some Linux X11 desktops.
-    // Keep dictation + tray + web dashboard fully functional and skip only the
-    // optional overlay there. Wayland/macOS/Windows keep the overlay enabled.
+    // Linux WebKit/GTK overlays can select X11 even in mixed Wayland/XWayland
+    // sessions and crash winit asynchronously with GLXBadWindow. Environment
+    // detection is therefore not reliable enough. The overlay is opt-in on
+    // Linux from v1.4.0; dictation, tray and the web dashboard stay enabled.
     #[cfg(target_os = "linux")]
-    let overlay_enabled = !std::env::var("XDG_SESSION_TYPE")
-        .map(|v| v.eq_ignore_ascii_case("x11"))
-        .unwrap_or(false)
-        || std::env::var("G_TYPE_FORCE_OVERLAY").as_deref() == Ok("1");
+    let overlay_enabled = std::env::var("G_TYPE_FORCE_OVERLAY").as_deref() == Ok("1");
     #[cfg(not(target_os = "linux"))]
     let overlay_enabled = true;
 
     if !overlay_enabled {
-        warn!("Overlay disabled on Linux X11 to avoid GLXBadWindow; tray and dictation remain active");
+        warn!("Overlay disabled on Linux safe mode; set G_TYPE_FORCE_OVERLAY=1 to opt in");
     }
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -384,16 +380,28 @@ fn main() -> Result<()> {
                 Event::UserEvent(daemon_event) => match daemon_event {
                     DaemonEvent::StateChanged(state) => match state {
                         DaemonState::Idle => {
-                            if let Some(t) = &tray_mgr { t.set_idle(); }
-                            if let Some(o) = &overlay_mgr { let _ = o.set_idle(); }
+                            if let Some(t) = &tray_mgr {
+                                t.set_idle();
+                            }
+                            if let Some(o) = &overlay_mgr {
+                                let _ = o.set_idle();
+                            }
                         }
                         DaemonState::Recording { profile } => {
-                            if let Some(t) = &tray_mgr { t.set_recording(&profile); }
-                            if let Some(o) = &overlay_mgr { let _ = o.set_recording(); }
+                            if let Some(t) = &tray_mgr {
+                                t.set_recording(&profile);
+                            }
+                            if let Some(o) = &overlay_mgr {
+                                let _ = o.set_recording();
+                            }
                         }
                         DaemonState::Processing { profile: _ } => {
-                            if let Some(t) = &tray_mgr { t.set_processing(); }
-                            if let Some(o) = &overlay_mgr { let _ = o.set_processing(); }
+                            if let Some(t) = &tray_mgr {
+                                t.set_processing();
+                            }
+                            if let Some(o) = &overlay_mgr {
+                                let _ = o.set_processing();
+                            }
                         }
                     },
                     DaemonEvent::ProfileActivated(_) => {}
@@ -401,7 +409,10 @@ fn main() -> Result<()> {
                     DaemonEvent::Error(err) => error!("UI error: {}", err),
                     DaemonEvent::Quit => elwt.exit(),
                 },
-                Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => elwt.exit(),
+                Event::WindowEvent {
+                    event: WindowEvent::CloseRequested,
+                    ..
+                } => elwt.exit(),
                 _ => {}
             }
         });
