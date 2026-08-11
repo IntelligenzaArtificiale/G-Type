@@ -4,69 +4,228 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>G-Type | Dashboard</title>
-<script src="https://cdn.tailwindcss.com"></script>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:#090909; color:#f4f4f5; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-  .shell { max-width:1080px; margin:0 auto; padding:38px 22px 60px; }
-  .header { display:flex; align-items:center; justify-content:space-between; gap:24px; padding-bottom:24px; border-bottom:1px solid #222; margin-bottom:30px; }
-  .brand { font-size:25px; font-weight:800; letter-spacing:-.04em; }
-  .version { color:#52525b; font-size:11px; margin-top:3px; }
-  .stats { display:flex; gap:0; }
-  .stat { min-width:120px; text-align:center; padding:0 22px; border-left:1px solid #222; }
-  .stat:first-child { border-left:0; }
-  .stat strong { display:block; font:700 18px ui-monospace,SFMono-Regular,Menlo,monospace; }
-  .stat span { display:block; margin-top:5px; color:#52525b; font-size:11px; }
-  .grid { display:grid; grid-template-columns:330px 1fr; gap:24px; align-items:start; }
-  .stack { display:grid; gap:16px; }
-  .card { background:#171717; border:1px solid #2a2a2a; border-radius:15px; padding:20px; }
-  .card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
-  .card h2 { margin:0; font-size:14px; font-weight:750; color:#fff; }
-  .provider { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:14px; }
-  .badge { padding:4px 9px; border-radius:999px; font-size:10px; font-weight:750; letter-spacing:.04em; text-transform:uppercase; }
-  .ok { color:#4ade80; background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.25); }
-  .warn { color:#fbbf24; background:rgba(245,158,11,.12); border:1px solid rgba(245,158,11,.25); }
-  button { font:inherit; }
-  .btn { border:1px solid #363636; background:#222; color:#e4e4e7; border-radius:8px; padding:7px 11px; font-size:12px; font-weight:650; cursor:pointer; }
-  .btn:hover { background:#2c2c2c; color:#fff; }
-  .btn-blue { background:#2563eb; border-color:#2563eb; color:white; }
-  .btn-blue:hover { background:#1d4ed8; }
-  .btn-red { color:#f87171; background:transparent; border-color:transparent; }
+  :root {
+    color-scheme: dark;
+    --bg:#090909;
+    --panel:#151515;
+    --panel-2:#101010;
+    --panel-3:#0c0c0c;
+    --border:#292929;
+    --border-soft:#202020;
+    --text:#f4f4f5;
+    --muted:#71717a;
+    --faint:#45454d;
+    --blue:#3b82f6;
+    --green:#34d399;
+    --purple:#c084fc;
+    --amber:#fbbf24;
+    --red:#f87171;
+  }
+  * { box-sizing:border-box; }
+  html { background:var(--bg); }
+  body {
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  button,input,select,textarea { font:inherit; }
+  button { color:inherit; }
+  .shell { max-width:1180px; margin:0 auto; padding:28px 28px 70px; }
+  .header {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:26px;
+    padding:4px 0 24px;
+    border-bottom:1px solid var(--border-soft);
+  }
+  .brand { font-size:26px; font-weight:850; letter-spacing:-.045em; }
+  .version { color:var(--faint); font-size:11px; margin-top:4px; }
+  .top-stats { display:flex; align-items:stretch; }
+  .top-stat { min-width:142px; text-align:center; padding:0 24px; border-left:1px solid var(--border-soft); }
+  .top-stat:first-child { border-left:0; }
+  .top-stat strong { display:block; font:750 19px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.01em; }
+  .top-stat span { display:block; margin-top:6px; color:var(--faint); font-size:11px; }
+  .nav {
+    display:flex;
+    align-items:center;
+    gap:4px;
+    margin:18px 0 26px;
+    padding:4px;
+    width:max-content;
+    background:#111;
+    border:1px solid var(--border-soft);
+    border-radius:11px;
+  }
+  .nav-btn {
+    border:0;
+    background:transparent;
+    color:#777780;
+    padding:9px 15px;
+    border-radius:8px;
+    cursor:pointer;
+    font-size:12px;
+    font-weight:720;
+    transition:.15s ease;
+  }
+  .nav-btn:hover { color:#ddd; }
+  .nav-btn.active { color:#fff; background:#262626; box-shadow:inset 0 0 0 1px #333; }
+  .view { display:none; }
+  .view.active { display:block; }
+  .page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin-bottom:16px; }
+  .page-title { margin:0; font-size:18px; letter-spacing:-.02em; }
+  .page-subtitle { margin-top:5px; color:var(--muted); font-size:12px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:15px; padding:20px; }
+  .card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:15px; }
+  .card h2 { margin:0; font-size:14px; font-weight:760; }
+  .card h3 { margin:0; font-size:12px; font-weight:730; color:#e4e4e7; }
+  .muted { color:var(--muted); font-size:11px; }
+  .faint { color:var(--faint); font-size:11px; }
+  .mono { font:500 12px ui-monospace,SFMono-Regular,Menlo,monospace; color:#a1a1aa; }
+  .btn {
+    border:1px solid #363636;
+    background:#222;
+    color:#e4e4e7;
+    border-radius:8px;
+    padding:8px 11px;
+    font-size:12px;
+    font-weight:680;
+    cursor:pointer;
+    transition:.15s ease;
+  }
+  .btn:hover { background:#2b2b2b; color:#fff; }
+  .btn:disabled { opacity:.35; cursor:default; }
+  .btn-primary { background:#2563eb; border-color:#2563eb; color:white; }
+  .btn-primary:hover { background:#1d4ed8; }
+  .btn-danger { color:var(--red); background:transparent; border-color:transparent; }
+  .btn-ghost { background:transparent; }
+  .badge { display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border-radius:999px; font-size:10px; font-weight:760; letter-spacing:.04em; text-transform:uppercase; }
+  .badge.ok { color:#4ade80; background:rgba(34,197,94,.11); border:1px solid rgba(34,197,94,.24); }
+  .badge.warn { color:var(--amber); background:rgba(245,158,11,.11); border:1px solid rgba(245,158,11,.22); }
+  .badge.blue { color:#93c5fd; background:rgba(59,130,246,.10); border:1px solid rgba(59,130,246,.22); }
+
+  /* History */
+  .history-card { min-height:650px; display:flex; flex-direction:column; }
+  .history-toolbar { display:flex; align-items:center; gap:10px; }
+  .search { width:260px; }
+  .history-list { display:grid; gap:9px; flex:1; }
+  .history-item { background:#111; border:1px solid #262626; border-radius:12px; padding:15px 16px; }
+  .history-meta { display:flex; flex-wrap:wrap; align-items:center; gap:10px; color:#55555e; font-size:10px; margin-bottom:10px; }
+  .history-meta .cost { margin-left:auto; }
+  .history-text { color:#e4e4e7; font-size:14px; line-height:1.58; white-space:pre-wrap; word-break:break-word; }
+  .history-text.collapsed { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .history-actions { display:flex; gap:12px; margin-top:9px; }
+  .link { border:0; padding:0; background:none; color:#438af8; font-size:11px; cursor:pointer; }
+  .pager { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:17px; padding-top:17px; border-top:1px solid var(--border-soft); }
+  .empty { color:#55555e; font-size:13px; text-align:center; padding:70px 20px; }
+
+  /* Statistics */
+  .kpi-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+  .kpi { background:#121212; border:1px solid #262626; border-radius:13px; padding:17px; }
+  .kpi-label { color:#666670; font-size:10px; font-weight:740; text-transform:uppercase; letter-spacing:.06em; }
+  .kpi-value { margin-top:8px; font:760 22px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:-.025em; }
+  .kpi-note { color:#4f4f58; font-size:10px; margin-top:5px; }
+  .stats-grid { display:grid; grid-template-columns:1.35fr .85fr; gap:14px; }
+  .bars { display:flex; align-items:flex-end; gap:8px; min-height:215px; padding-top:18px; }
+  .day-col { flex:1; min-width:0; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:7px; height:215px; }
+  .bar-wrap { flex:1; width:100%; display:flex; align-items:flex-end; justify-content:center; }
+  .bar { width:min(28px,72%); min-height:3px; border-radius:5px 5px 2px 2px; background:linear-gradient(180deg,#60a5fa,#2563eb); box-shadow:0 0 20px rgba(37,99,235,.08); }
+  .bar-value { color:#71717a; font-size:9px; }
+  .bar-label { color:#4f4f58; font-size:9px; white-space:nowrap; }
+  .model-list { display:grid; gap:15px; }
+  .model-row { display:grid; gap:7px; }
+  .model-top { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:11px; }
+  .progress { height:6px; background:#262626; border-radius:999px; overflow:hidden; }
+  .progress > span { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,#8b5cf6,#c084fc); }
+  .summary-list { display:grid; gap:0; margin-top:5px; }
+  .summary-row { display:flex; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid #222; font-size:12px; }
+  .summary-row:last-child { border-bottom:0; }
+  .summary-row span:first-child { color:#71717a; }
+
+  /* Settings */
+  .settings-grid { display:grid; grid-template-columns:350px 1fr; gap:14px; align-items:start; }
+  .settings-stack { display:grid; gap:14px; }
+  .provider-box { background:#101010; border:1px solid #292929; border-radius:11px; padding:14px; }
+  .provider-top { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .provider-name { font-size:14px; font-weight:740; }
+  .secret { margin-top:10px; color:#8d8d96; font:500 11px ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .api-editor { display:none; margin-top:13px; padding-top:13px; border-top:1px solid #252525; }
+  .api-editor.open { display:block; }
+  .system-list { display:grid; gap:0; }
+  .system-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:11px 0; border-bottom:1px solid #222; font-size:11px; }
+  .system-row:last-child { border-bottom:0; }
+  .system-row span:first-child { color:#71717a; }
   .profile { background:#101010; border:1px solid #292929; border-radius:11px; padding:14px; margin-top:10px; }
   .profile-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
-  .profile-name { font-size:14px; font-weight:750; color:#f4f4f5; }
-  .mono { font:500 12px ui-monospace,SFMono-Regular,Menlo,monospace; color:#a1a1aa; margin-top:4px; }
-  .muted { color:#52525b; font-size:11px; margin-top:3px; }
+  .profile-name { font-size:14px; font-weight:750; }
+  .profile-meta { display:flex; gap:7px; flex-wrap:wrap; margin-top:7px; }
+  .chip { color:#787882; background:#181818; border:1px solid #292929; border-radius:6px; padding:4px 7px; font:500 10px ui-monospace,SFMono-Regular,Menlo,monospace; }
   .actions { display:flex; gap:6px; }
   .editor { display:none; border-top:1px solid #292929; margin-top:13px; padding-top:13px; }
   .editor.open { display:block; }
   .form-grid { display:grid; gap:11px; }
+  .form-row-2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   label { display:block; color:#71717a; font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.06em; margin-bottom:5px; }
-  input, select, textarea { width:100%; background:#0d0d0d; border:1px solid #333; border-radius:8px; color:#f4f4f5; padding:9px 10px; outline:none; font-size:13px; }
-  input:focus, select:focus, textarea:focus { border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,.12); }
+  input,select,textarea {
+    width:100%;
+    background:#0c0c0c;
+    border:1px solid #333;
+    border-radius:8px;
+    color:#f4f4f5;
+    padding:9px 10px;
+    outline:none;
+    font-size:13px;
+  }
+  input:focus,select:focus,textarea:focus { border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,.10); }
   textarea { min-height:88px; resize:vertical; }
-  .hint { color:#52525b; font-size:10px; margin-top:5px; }
-  .history-card { min-height:620px; display:flex; flex-direction:column; }
-  .history-list { display:grid; gap:9px; flex:1; }
-  .history-item { background:#121212; border:1px solid #282828; border-radius:11px; padding:14px 16px; }
-  .history-meta { display:flex; flex-wrap:wrap; align-items:center; gap:10px; color:#52525b; font-size:10px; margin-bottom:10px; }
-  .history-meta .cost { margin-left:auto; }
-  .history-text { color:#e4e4e7; font-size:14px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
-  .history-text.collapsed { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .history-actions { display:flex; gap:10px; margin-top:9px; }
-  .link { border:0; padding:0; background:none; color:#3b82f6; font-size:11px; cursor:pointer; }
-  .pager { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:16px; padding-top:16px; border-top:1px solid #222; }
-  .empty { color:#52525b; font-size:13px; text-align:center; padding:60px 20px; }
-  #toast { position:fixed; right:24px; bottom:24px; z-index:99; padding:12px 16px; border-radius:10px; background:#202020; border:1px solid #3a3a3a; box-shadow:0 12px 35px rgba(0,0,0,.5); font-size:13px; opacity:0; transform:translateY(8px); pointer-events:none; transition:.2s ease; }
+  .hint { color:#55555e; font-size:10px; margin-top:5px; line-height:1.4; }
+  .create-card { display:none; border-color:#1d4ed8; }
+  .create-card.open { display:block; }
+
+  #toast {
+    position:fixed;
+    right:24px;
+    bottom:24px;
+    z-index:99;
+    max-width:360px;
+    padding:12px 16px;
+    border-radius:10px;
+    background:#202020;
+    border:1px solid #3a3a3a;
+    box-shadow:0 12px 35px rgba(0,0,0,.55);
+    font-size:13px;
+    opacity:0;
+    transform:translateY(8px);
+    pointer-events:none;
+    transition:.2s ease;
+  }
   #toast.show { opacity:1; transform:none; }
   #toast.error { border-color:#7f1d1d; color:#fecaca; }
-  @media (max-width:820px) {
+
+  @media (max-width:900px) {
     .header { align-items:flex-start; flex-direction:column; }
-    .stats { width:100%; justify-content:space-between; }
-    .stat { min-width:0; flex:1; padding:0 10px; }
-    .grid { grid-template-columns:1fr; }
-    .history-card { min-height:auto; }
+    .top-stats { width:100%; justify-content:space-between; }
+    .top-stat { min-width:0; flex:1; padding:0 12px; }
+    .settings-grid,.stats-grid { grid-template-columns:1fr; }
+    .kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  }
+  @media (max-width:620px) {
+    .shell { padding:20px 14px 50px; }
+    .header { gap:20px; }
+    .top-stat strong { font-size:15px; }
+    .top-stat span { font-size:9px; }
+    .top-stat { padding:0 8px; }
+    .nav { width:100%; }
+    .nav-btn { flex:1; padding:9px 7px; }
+    .page-head { align-items:flex-start; flex-direction:column; }
+    .history-toolbar,.search { width:100%; }
+    .kpi-grid { grid-template-columns:1fr; }
+    .form-row-2 { grid-template-columns:1fr; }
+    .history-meta .cost { margin-left:0; }
+    .bars { gap:4px; }
   }
 </style>
 </head>
@@ -78,47 +237,112 @@
       <div class="brand">G-Type</div>
       <div class="version" id="version">Dashboard locale</div>
     </div>
-    <div class="stats">
-      <div class="stat"><strong id="stat-money" style="color:#34d399">—</strong><span>Costo totale</span></div>
-      <div class="stat"><strong id="stat-time" style="color:#60a5fa">—</strong><span>Tempo risparmiato</span></div>
-      <div class="stat"><strong id="stat-words" style="color:#c084fc">—</strong><span>Parole dettate</span></div>
+    <div class="top-stats">
+      <div class="top-stat"><strong id="stat-money" style="color:var(--green)">—</strong><span>Costo totale</span></div>
+      <div class="top-stat"><strong id="stat-time" style="color:#60a5fa">—</strong><span>Tempo risparmiato</span></div>
+      <div class="top-stat"><strong id="stat-words" style="color:var(--purple)">—</strong><span>Parole dettate</span></div>
     </div>
   </header>
 
-  <main class="grid">
-    <aside class="stack">
-      <section class="card">
-        <div class="card-head"><h2>Provider API</h2></div>
-        <div id="provider-list"></div>
-      </section>
+  <nav class="nav" aria-label="Navigazione dashboard">
+    <button class="nav-btn active" data-page="history" onclick="navigate('history')">Cronologia</button>
+    <button class="nav-btn" data-page="stats" onclick="navigate('stats')">Statistiche</button>
+    <button class="nav-btn" data-page="settings" onclick="navigate('settings')">Impostazioni</button>
+  </nav>
 
-      <section class="card">
-        <div class="card-head">
-          <h2>Profili</h2>
-          <button class="btn btn-blue" onclick="toggleCreate(true)">+ Nuovo</button>
+  <main>
+    <section class="view active" id="view-history">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Cronologia trascrizioni</h1>
+          <div class="page-subtitle">Le ultime registrazioni, con durata, parole, modello e costo.</div>
         </div>
-        <div id="profile-list"></div>
-      </section>
-
-      <section class="card" id="create-card" style="display:none;border-color:#1d4ed8">
-        <div class="card-head"><h2>Nuovo profilo</h2></div>
-        <div class="form-grid">
-          <div><label>Nome</label><input id="new-name" placeholder="es. dictation-work"></div>
-          <div><label>Hotkey</label><input id="new-hotkey" class="mono" placeholder="ctrl+shift+space"><div class="hint">Esempi: ctrl+shift+space, alt+r, ctrl+f8</div></div>
-          <div><label>Modello</label><select id="new-model"></select></div>
-          <div><label>Prompt personalizzato</label><textarea id="new-prompt" placeholder="Opzionale"></textarea></div>
-          <div style="display:flex;gap:8px"><button class="btn btn-blue" onclick="createProfile()">Crea</button><button class="btn" onclick="toggleCreate(false)">Annulla</button></div>
+        <div class="history-toolbar">
+          <input class="search" id="history-search" type="search" placeholder="Cerca nel testo…" oninput="searchHistory(this.value)">
+        </div>
+      </div>
+      <section class="card history-card">
+        <div class="card-head"><h2>Trascrizioni</h2><span id="history-count" class="muted"></span></div>
+        <div id="history-list" class="history-list"></div>
+        <div id="pager" class="pager" style="display:none">
+          <button class="btn" id="prev" onclick="changePage(-1)">← Precedente</button>
+          <span class="muted" id="page-info"></span>
+          <button class="btn" id="next" onclick="changePage(1)">Successiva →</button>
         </div>
       </section>
-    </aside>
+    </section>
 
-    <section class="card history-card">
-      <div class="card-head"><h2>Cronologia trascrizioni</h2><span id="history-count" class="muted"></span></div>
-      <div id="history-list" class="history-list"></div>
-      <div id="pager" class="pager" style="display:none">
-        <button class="btn" id="prev" onclick="changePage(-1)">← Precedente</button>
-        <span class="muted" id="page-info"></span>
-        <button class="btn" id="next" onclick="changePage(1)">Successiva →</button>
+    <section class="view" id="view-stats">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Statistiche</h1>
+          <div class="page-subtitle">Analisi costruita sui dati locali realmente registrati da G-Type.</div>
+        </div>
+      </div>
+      <div class="kpi-grid" id="analytics-kpis"></div>
+      <div class="stats-grid">
+        <section class="card">
+          <div class="card-head"><div><h2>Attività ultimi 14 giorni</h2><div class="faint">Parole dettate per giorno</div></div></div>
+          <div id="daily-bars" class="bars"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><div><h2>Modelli utilizzati</h2><div class="faint">Distribuzione per numero di trascrizioni</div></div></div>
+          <div id="model-list" class="model-list"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2>Efficienza</h2></div>
+          <div class="summary-list" id="efficiency-list"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2>Utilizzo tecnico</h2></div>
+          <div class="summary-list" id="technical-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="view" id="view-settings">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Impostazioni</h1>
+          <div class="page-subtitle">Provider, API key e profili di dettatura. Le modifiche ai profili diventano attive live.</div>
+        </div>
+      </div>
+      <div class="settings-grid">
+        <div class="settings-stack">
+          <section class="card">
+            <div class="card-head"><h2>Provider API</h2></div>
+            <div id="provider-list"></div>
+          </section>
+          <section class="card">
+            <div class="card-head"><h2>Sistema</h2></div>
+            <div class="system-list" id="system-list"></div>
+            <div style="margin-top:14px"><button class="btn btn-ghost" onclick="openConfig()">Apri file configurazione</button></div>
+          </section>
+        </div>
+
+        <div class="settings-stack">
+          <section class="card">
+            <div class="card-head">
+              <div><h2>Profili di dettatura</h2><div class="faint">Ogni profilo può avere hotkey, modello e prompt dedicati.</div></div>
+              <button class="btn btn-primary" onclick="toggleCreate(true)">+ Nuovo profilo</button>
+            </div>
+            <div id="profile-list"></div>
+          </section>
+
+          <section class="card create-card" id="create-card">
+            <div class="card-head"><h2>Nuovo profilo</h2><button class="btn btn-ghost" onclick="toggleCreate(false)">Chiudi</button></div>
+            <div class="form-grid">
+              <div class="form-row-2">
+                <div><label>Nome</label><input id="new-name" placeholder="es. coding"></div>
+                <div><label>Hotkey</label><input id="new-hotkey" class="mono" placeholder="ctrl+shift+space"></div>
+              </div>
+              <div><label>Modello</label><select id="new-model"></select></div>
+              <div><label>Prompt personalizzato</label><textarea id="new-prompt" placeholder="Opzionale: lascia vuoto per il prompt predefinito"></textarea></div>
+              <div class="hint">Esempi hotkey: ctrl+shift+space, alt+r, ctrl+f8. Non puoi usare la stessa hotkey su due profili.</div>
+              <div><button class="btn btn-primary" onclick="createProfile()">Crea profilo</button></div>
+            </div>
+          </section>
+        </div>
       </div>
     </section>
   </main>
@@ -131,173 +355,376 @@ const MODELS = [
   ['models/gemini-2.5-flash-lite','gemini-2.5-flash-lite'],
   ['models/gemini-2.5-pro','gemini-2.5-pro']
 ];
+const PAGE_SIZE = 8;
+let stateData = null;
 let appConfig = null;
+let analytics = null;
 let allRecords = [];
+let filteredRecords = [];
 let currentPage = 0;
-const PAGE_SIZE = 5;
 
 function modelOptions(selected) {
-  return MODELS.map(([v,l]) => `<option value="${esc(v)}" ${v===selected?'selected':''}>${esc(l)}</option>`).join('');
+  return MODELS.map(([value,label]) => `<option value="${esc(value)}" ${value===selected?'selected':''}>${esc(label)}</option>`).join('');
 }
 
 document.getElementById('new-model').innerHTML = modelOptions('models/gemini-2.5-flash');
+window.addEventListener('hashchange', applyRoute);
+applyRoute();
 init();
 
 async function init() {
-  await Promise.all([loadState(), loadHistory()]);
+  await Promise.all([loadState(), loadHistory(), loadStatistics()]);
+}
+
+function applyRoute() {
+  const requested = (location.hash || '#history').slice(1);
+  const page = ['history','stats','settings'].includes(requested) ? requested : 'history';
+  document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === 'view-'+page));
+  document.querySelectorAll('.nav-btn').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+}
+
+function navigate(page) {
+  if (location.hash === '#'+page) applyRoute();
+  else location.hash = page;
 }
 
 async function loadState() {
   try {
-    const res = await fetch('/api/state', {cache:'no-store'});
+    const res = await fetch('/api/state',{cache:'no-store'});
     if (!res.ok) throw new Error('HTTP '+res.status);
-    const data = await res.json();
-    appConfig = data.config;
-    const s = data.stats || {};
+    stateData = await res.json();
+    appConfig = stateData.config || {};
+    const s = stateData.stats || {};
     document.getElementById('stat-money').textContent = '$' + Number(s.total_cost_usd || 0).toFixed(4);
     document.getElementById('stat-time').textContent = formatDur(s.time_saved_secs || 0);
     document.getElementById('stat-words').textContent = Number(s.total_words || 0).toLocaleString('it-IT');
-    document.getElementById('version').textContent = 'v' + ((data.runtime && data.runtime.version) || '?') + (data.runtime && data.runtime.live_profile_reload ? ' · modifiche profili live' : '');
+    const runtime = stateData.runtime || {};
+    document.getElementById('version').textContent = 'v' + (runtime.version || '?') + (runtime.live_profile_reload ? ' · profili live' : '');
     renderProvider();
     renderProfiles();
+    renderSystem();
   } catch (e) {
-    toast('Dashboard non connessa al daemon', true);
+    toast('Dashboard non connessa al daemon',true);
     console.error(e);
   }
 }
 
 function renderProvider() {
-  const keys = (appConfig && appConfig.keys) || {};
-  const active = !!(keys.gemini && String(keys.gemini).length > 0);
-  document.getElementById('provider-list').innerHTML = `<div class="provider"><span>Google Gemini</span><span class="badge ${active?'ok':'warn'}">${active?'✓ attivo':'! mancante'}</span></div>`;
+  const host = document.getElementById('provider-list');
+  const provider = ((stateData || {}).providers || {}).gemini || {};
+  const active = !!provider.configured;
+  host.innerHTML = `<div class="provider-box">
+    <div class="provider-top">
+      <div><div class="provider-name">Google Gemini</div><div class="secret">${esc(provider.masked_key || 'API key non configurata')}</div></div>
+      <span class="badge ${active?'ok':'warn'}">${active?'✓ attivo':'! mancante'}</span>
+    </div>
+    <div style="margin-top:12px"><button class="btn" onclick="toggleApiEditor()">Cambia API key</button></div>
+    <div class="api-editor" id="api-editor">
+      <label>Nuova Gemini API key</label>
+      <input type="password" id="gemini-api-key" autocomplete="off" placeholder="AIza…">
+      <div class="hint">La chiave non viene mai restituita in chiaro dalla dashboard.</div>
+      <div style="margin-top:10px"><button class="btn btn-primary" onclick="saveApiKey()">Salva API key</button></div>
+    </div>
+  </div>`;
+}
+
+function toggleApiEditor() {
+  const el = document.getElementById('api-editor');
+  if (el) {
+    el.classList.toggle('open');
+    if (el.classList.contains('open')) setTimeout(() => document.getElementById('gemini-api-key')?.focus(),0);
+  }
+}
+
+async function saveApiKey() {
+  const input = document.getElementById('gemini-api-key');
+  const apiKey = (input?.value || '').trim();
+  if (!apiKey) return toast('Inserisci una API key valida',true);
+  const res = await fetch('/api/keys/gemini',{
+    method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({api_key:apiKey})
+  });
+  const data = await safeJson(res);
+  if (!res.ok) return toast(data.error || 'Errore salvataggio API key',true);
+  if (input) input.value='';
+  toast('API key aggiornata');
+  await loadState();
+}
+
+function renderSystem() {
+  const runtime = (stateData && stateData.runtime) || {};
+  const profiles = (appConfig && appConfig.profiles) || [];
+  const html = [
+    ['Versione','v'+(runtime.version || '?')],
+    ['Reload profili',runtime.live_profile_reload ? '<span class="badge ok">live</span>' : '<span class="badge warn">restart</span>'],
+    ['Profili configurati',String(profiles.length)],
+    ['Dashboard','127.0.0.1:9741']
+  ].map(([a,b]) => `<div class="system-row"><span>${a}</span><span>${b}</span></div>`).join('');
+  document.getElementById('system-list').innerHTML = html;
 }
 
 function renderProfiles() {
   const list = document.getElementById('profile-list');
   const profiles = (appConfig && appConfig.profiles) || [];
-  if (!profiles.length) { list.innerHTML = '<div class="empty">Nessun profilo.</div>'; return; }
-  list.innerHTML = profiles.map((p,i) => {
-    const id = 'edit-'+i;
-    const canDelete = profiles.length > 1;
-    return `<div class="profile">
+  if (!profiles.length) {
+    list.innerHTML='<div class="empty">Nessun profilo configurato.</div>';
+    return;
+  }
+  list.innerHTML = profiles.map((p,index) => {
+    const id='edit-'+index;
+    const canDelete=profiles.length>1;
+    return `<article class="profile">
       <div class="profile-top">
         <div style="min-width:0">
           <div class="profile-name">${esc(p.name)}</div>
-          <div class="mono">${esc(p.hotkey)}</div>
-          <div class="muted">${esc(String(p.model||'').replace('models/',''))}</div>
+          <div class="profile-meta">
+            <span class="chip">${esc(p.hotkey)}</span>
+            <span class="chip">${esc(String(p.model||'').replace('models/',''))}</span>
+            ${p.custom_prompt?'<span class="chip">prompt custom</span>':''}
+          </div>
         </div>
         <div class="actions">
           <button class="btn" onclick="toggleEditor('${id}')">Modifica</button>
-          ${canDelete?`<button class="btn btn-red" onclick='deleteProfile(${JSON.stringify(p.name)})'>✕</button>`:''}
+          ${canDelete?`<button class="btn btn-danger" onclick='deleteProfile(${JSON.stringify(p.name)})'>Elimina</button>`:''}
         </div>
       </div>
       <div class="editor" id="${id}">
         <div class="form-grid">
-          <div><label>Nome</label><input id="${id}-name" value="${escAttr(p.name)}"></div>
-          <div><label>Hotkey</label><input id="${id}-hotkey" class="mono" value="${escAttr(p.hotkey)}"><div class="hint">La nuova hotkey diventa attiva automaticamente entro circa 1 secondo.</div></div>
+          <div class="form-row-2">
+            <div><label>Nome</label><input id="${id}-name" value="${escAttr(p.name)}"></div>
+            <div><label>Hotkey</label><input id="${id}-hotkey" class="mono" value="${escAttr(p.hotkey)}"></div>
+          </div>
           <div><label>Modello</label><select id="${id}-model">${modelOptions(p.model)}</select></div>
           <div><label>Prompt personalizzato</label><textarea id="${id}-prompt" placeholder="Lascia vuoto per il prompt predefinito">${esc(p.custom_prompt||'')}</textarea></div>
-          <div style="display:flex;gap:8px"><button class="btn btn-blue" onclick='saveProfile(${JSON.stringify(p.name)},${JSON.stringify(id)})'>Salva modifiche</button><button class="btn" onclick="toggleEditor('${id}')">Annulla</button></div>
+          <div class="hint">Hotkey e impostazioni vengono applicate dal daemon senza riavvio.</div>
+          <div style="display:flex;gap:8px"><button class="btn btn-primary" onclick='saveProfile(${JSON.stringify(p.name)},${JSON.stringify(id)})'>Salva modifiche</button><button class="btn" onclick="toggleEditor('${id}')">Annulla</button></div>
         </div>
       </div>
-    </div>`;
+    </article>`;
   }).join('');
 }
 
 function toggleEditor(id) {
-  const el = document.getElementById(id);
-  if (el) el.classList.toggle('open');
+  document.getElementById(id)?.classList.toggle('open');
 }
 
 function toggleCreate(show) {
-  document.getElementById('create-card').style.display = show ? 'block' : 'none';
-  if (show) document.getElementById('new-name').focus();
+  const el=document.getElementById('create-card');
+  el.classList.toggle('open',!!show);
+  if (show) setTimeout(() => document.getElementById('new-name')?.focus(),0);
 }
 
 async function saveProfile(currentName,id) {
-  const payload = {
-    name: document.getElementById(id+'-name').value.trim(),
-    hotkey: document.getElementById(id+'-hotkey').value.trim(),
-    model: document.getElementById(id+'-model').value,
-    provider: 'gemini',
-    custom_prompt: document.getElementById(id+'-prompt').value.trim() || null
+  const payload={
+    name:document.getElementById(id+'-name').value.trim(),
+    hotkey:document.getElementById(id+'-hotkey').value.trim(),
+    model:document.getElementById(id+'-model').value,
+    provider:'gemini',
+    custom_prompt:document.getElementById(id+'-prompt').value.trim() || null
   };
-  if (!payload.name || !payload.hotkey) return toast('Nome e hotkey sono obbligatori', true);
-  const res = await fetch('/api/profiles/'+encodeURIComponent(currentName), {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const data = await safeJson(res);
-  if (!res.ok) return toast(data.error || 'Errore salvataggio', true);
-  toast('Profilo aggiornato: hotkey e impostazioni applicate live');
+  if (!payload.name || !payload.hotkey) return toast('Nome e hotkey sono obbligatori',true);
+  const res=await fetch('/api/profiles/'+encodeURIComponent(currentName),{
+    method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)
+  });
+  const data=await safeJson(res);
+  if (!res.ok) return toast(data.error || 'Errore salvataggio profilo',true);
+  toast('Profilo aggiornato e applicato live');
   await loadState();
 }
 
 async function createProfile() {
-  const payload = {
-    name: document.getElementById('new-name').value.trim(),
-    hotkey: document.getElementById('new-hotkey').value.trim(),
-    model: document.getElementById('new-model').value,
-    provider: 'gemini',
-    custom_prompt: document.getElementById('new-prompt').value.trim() || null
+  const payload={
+    name:document.getElementById('new-name').value.trim(),
+    hotkey:document.getElementById('new-hotkey').value.trim(),
+    model:document.getElementById('new-model').value,
+    provider:'gemini',
+    custom_prompt:document.getElementById('new-prompt').value.trim() || null
   };
-  if (!payload.name || !payload.hotkey) return toast('Nome e hotkey sono obbligatori', true);
-  const res = await fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const data = await safeJson(res);
-  if (!res.ok) return toast(data.error || 'Errore creazione profilo', true);
-  document.getElementById('new-name').value=''; document.getElementById('new-hotkey').value=''; document.getElementById('new-prompt').value='';
-  toggleCreate(false); toast('Profilo creato e attivo senza riavvio'); await loadState();
+  if (!payload.name || !payload.hotkey) return toast('Nome e hotkey sono obbligatori',true);
+  const res=await fetch('/api/profiles',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)
+  });
+  const data=await safeJson(res);
+  if (!res.ok) return toast(data.error || 'Errore creazione profilo',true);
+  document.getElementById('new-name').value='';
+  document.getElementById('new-hotkey').value='';
+  document.getElementById('new-prompt').value='';
+  toggleCreate(false);
+  toast('Profilo creato e disponibile live');
+  await loadState();
 }
 
 async function deleteProfile(name) {
   if (!confirm(`Eliminare il profilo "${name}"?`)) return;
-  const res = await fetch('/api/profiles/'+encodeURIComponent(name),{method:'DELETE'});
-  const data = await safeJson(res);
-  if (!res.ok) return toast(data.error || 'Errore eliminazione', true);
-  toast('Profilo eliminato'); await loadState();
+  const res=await fetch('/api/profiles/'+encodeURIComponent(name),{method:'DELETE'});
+  const data=await safeJson(res);
+  if (!res.ok) return toast(data.error || 'Errore eliminazione profilo',true);
+  toast('Profilo eliminato');
+  await loadState();
+}
+
+async function openConfig() {
+  const res=await fetch('/api/open_config',{method:'POST'});
+  if (!res.ok) toast('Impossibile aprire il file configurazione',true);
 }
 
 async function loadHistory() {
   try {
-    const res = await fetch('/api/history',{cache:'no-store'});
+    const res=await fetch('/api/history',{cache:'no-store'});
     if (!res.ok) throw new Error('HTTP '+res.status);
-    allRecords = await res.json() || [];
-    currentPage = 0;
+    allRecords=await res.json() || [];
+    filteredRecords=allRecords.slice();
+    currentPage=0;
     renderHistory();
   } catch(e) {
-    document.getElementById('history-list').innerHTML = '<div class="empty">Impossibile caricare la cronologia.</div>';
+    document.getElementById('history-list').innerHTML='<div class="empty">Impossibile caricare la cronologia.</div>';
   }
 }
 
+function searchHistory(query) {
+  const q=String(query||'').trim().toLocaleLowerCase('it-IT');
+  filteredRecords=q ? allRecords.filter(r => String(r.text||'').toLocaleLowerCase('it-IT').includes(q)) : allRecords.slice();
+  currentPage=0;
+  renderHistory();
+}
+
 function renderHistory() {
-  const list = document.getElementById('history-list');
-  document.getElementById('history-count').textContent = allRecords.length + ' registrazioni';
-  if (!allRecords.length) { list.innerHTML='<div class="empty">Nessuna trascrizione ancora.</div>'; document.getElementById('pager').style.display='none'; return; }
-  const pages = Math.ceil(allRecords.length/PAGE_SIZE);
-  currentPage = Math.max(0,Math.min(currentPage,pages-1));
-  const rows = allRecords.slice(currentPage*PAGE_SIZE,currentPage*PAGE_SIZE+PAGE_SIZE);
-  list.innerHTML = rows.map((r,i) => {
-    const id = 'txt-'+currentPage+'-'+i;
-    const seconds = Number(r.duration_secs || r.audio_duration_secs || 0);
-    const words = Number(r.words || r.word_count || 0);
-    const model = String(r.model || '').replace('models/','');
-    const cost = Number(r.cost_usd || r.cost || 0);
+  const list=document.getElementById('history-list');
+  const total=filteredRecords.length;
+  const original=allRecords.length;
+  document.getElementById('history-count').textContent = total===original ? `${original} registrazioni` : `${total} di ${original}`;
+  if (!total) {
+    list.innerHTML='<div class="empty">Nessuna trascrizione trovata.</div>';
+    document.getElementById('pager').style.display='none';
+    return;
+  }
+  const pages=Math.ceil(total/PAGE_SIZE);
+  currentPage=Math.max(0,Math.min(currentPage,pages-1));
+  const rows=filteredRecords.slice(currentPage*PAGE_SIZE,currentPage*PAGE_SIZE+PAGE_SIZE);
+  list.innerHTML=rows.map((r,index) => {
+    const id='txt-'+currentPage+'-'+index;
+    const seconds=Number(r.audio_duration_secs || r.duration_secs || 0);
+    const words=Number(r.word_count || r.words || 0);
+    const model=String(r.model || '').replace('models/','');
+    const cost=Number(r.total_cost_usd || r.cost_usd || r.cost || 0);
     return `<article class="history-item">
-      <div class="history-meta"><span>${esc(r.timestamp || '')}</span><span>${seconds.toFixed(1)}s</span><span>${words} parole</span><span>${esc(model)}</span><span class="cost">$${cost.toFixed(5)}</span></div>
+      <div class="history-meta">
+        <span>${esc(formatTimestamp(r.timestamp || ''))}</span>
+        <span>${seconds.toFixed(1)}s</span>
+        <span>${words} parole</span>
+        <span>${esc(model)}</span>
+        <span class="cost">$${cost.toFixed(5)}</span>
+      </div>
       <div class="history-text collapsed" id="${id}">${esc(r.text || '')}</div>
       <div class="history-actions"><button class="link" onclick="toggleText('${id}',this)">Mostra tutto</button><button class="link" onclick='copyText(${JSON.stringify(r.text||'')})'>Copia</button></div>
     </article>`;
   }).join('');
-  const pager = document.getElementById('pager'); pager.style.display=pages>1?'flex':'none';
+  const pager=document.getElementById('pager');
+  pager.style.display=pages>1?'flex':'none';
   document.getElementById('page-info').textContent=`Pagina ${currentPage+1} di ${pages}`;
-  document.getElementById('prev').disabled=currentPage===0; document.getElementById('next').disabled=currentPage>=pages-1;
+  document.getElementById('prev').disabled=currentPage===0;
+  document.getElementById('next').disabled=currentPage>=pages-1;
 }
 
-function changePage(delta){ currentPage += delta; renderHistory(); window.scrollTo({top:0,behavior:'smooth'}); }
-function toggleText(id,btn){ const el=document.getElementById(id); const collapsed=el.classList.toggle('collapsed'); btn.textContent=collapsed?'Mostra tutto':'Riduci'; }
-async function copyText(text){ try { await navigator.clipboard.writeText(text); toast('Testo copiato'); } catch(e){ toast('Copia non disponibile',true); } }
-function formatDur(sec){ sec=Number(sec||0); if(sec>=3600)return (sec/3600).toFixed(1)+'h'; if(sec>=60)return Math.round(sec/60)+'m'; return Math.round(sec)+'s'; }
-function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function escAttr(s){ return esc(s); }
-async function safeJson(res){ try{return await res.json();}catch(e){return{};} }
-let toastTimer; function toast(msg,error=false){ const el=document.getElementById('toast'); el.textContent=msg; el.className=error?'show error':'show'; clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.className='',3000); }
+function changePage(delta) {
+  currentPage+=delta;
+  renderHistory();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function toggleText(id,btn) {
+  const el=document.getElementById(id);
+  if (!el) return;
+  const collapsed=el.classList.toggle('collapsed');
+  btn.textContent=collapsed?'Mostra tutto':'Riduci';
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast('Testo copiato'); }
+  catch(e) { toast('Copia non disponibile',true); }
+}
+
+async function loadStatistics() {
+  try {
+    const res=await fetch('/api/statistics',{cache:'no-store'});
+    if (!res.ok) throw new Error('HTTP '+res.status);
+    analytics=await res.json();
+    renderStatistics();
+  } catch(e) {
+    analytics=null;
+    document.getElementById('analytics-kpis').innerHTML='<div class="empty">Statistiche non disponibili.</div>';
+  }
+}
+
+function renderStatistics() {
+  if (!analytics) return;
+  const t=analytics.totals || {};
+  const a=analytics.averages || {};
+  const kpis=[
+    ['Registrazioni',num(t.count),'trascrizioni totali','#60a5fa'],
+    ['Audio totale',formatDur(t.audio_secs),'tempo parlato','#34d399'],
+    ['Media parole',Number(a.words_per_transcription||0).toFixed(1),'per trascrizione','#c084fc'],
+    ['Velocità voce',Number(a.speaking_wpm||0).toFixed(0)+' wpm','parole al minuto','#fbbf24'],
+    ['Token totali',num(t.total_tokens),'input + output','#f472b6'],
+    ['Costo / 1k parole','$'+Number(a.cost_per_1000_words_usd||0).toFixed(4),'efficienza economica','#2dd4bf']
+  ];
+  document.getElementById('analytics-kpis').innerHTML=kpis.map(([label,value,note,color]) => `<div class="kpi"><div class="kpi-label">${label}</div><div class="kpi-value" style="color:${color}">${value}</div><div class="kpi-note">${note}</div></div>`).join('');
+
+  const daily=analytics.daily || [];
+  const maxWords=Math.max(1,...daily.map(d => Number(d.words||0)));
+  document.getElementById('daily-bars').innerHTML=daily.length ? daily.map(d => {
+    const pct=Math.max(2,Math.round(Number(d.words||0)/maxWords*100));
+    const shortDate=String(d.date||'').slice(5).replace('-','/');
+    return `<div class="day-col" title="${esc(d.date)} · ${num(d.words)} parole · ${num(d.count)} trascrizioni"><div class="bar-value">${num(d.words)}</div><div class="bar-wrap"><div class="bar" style="height:${pct}%"></div></div><div class="bar-label">${esc(shortDate)}</div></div>`;
+  }).join('') : '<div class="empty" style="width:100%">Nessun dato giornaliero.</div>';
+
+  const models=analytics.models || [];
+  const maxCount=Math.max(1,...models.map(m => Number(m.count||0)));
+  document.getElementById('model-list').innerHTML=models.length ? models.sort((x,y)=>Number(y.count||0)-Number(x.count||0)).map(m => {
+    const pct=Math.max(2,Math.round(Number(m.count||0)/maxCount*100));
+    return `<div class="model-row"><div class="model-top"><span>${esc(m.model||'unknown')}</span><span class="muted">${num(m.count)} · ${num(m.words)} parole</span></div><div class="progress"><span style="width:${pct}%"></span></div></div>`;
+  }).join('') : '<div class="empty">Nessun dato modello.</div>';
+
+  document.getElementById('efficiency-list').innerHTML=[
+    ['Tempo risparmiato stimato',formatDur(t.time_saved_secs)],
+    ['Parole totali',num(t.words)],
+    ['Caratteri totali',num(t.chars)],
+    ['Durata media',Number(a.duration_secs||0).toFixed(1)+'s']
+  ].map(([label,value]) => `<div class="summary-row"><span>${label}</span><strong>${value}</strong></div>`).join('');
+
+  document.getElementById('technical-list').innerHTML=[
+    ['Input token',num(t.input_tokens)],
+    ['Output token',num(t.output_tokens)],
+    ['Costo totale','$'+Number(t.cost_usd||0).toFixed(5)],
+    ['Trascrizioni analizzate',num(t.count)]
+  ].map(([label,value]) => `<div class="summary-row"><span>${label}</span><strong>${value}</strong></div>`).join('');
+}
+
+function formatTimestamp(value) {
+  if (!value) return '';
+  const d=new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString('it-IT',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+function formatDur(sec) {
+  sec=Number(sec||0);
+  if (sec>=3600) return (sec/3600).toFixed(1)+'h';
+  if (sec>=60) return Math.round(sec/60)+'m';
+  return Math.round(sec)+'s';
+}
+function num(value) { return Number(value||0).toLocaleString('it-IT'); }
+function esc(value) { return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escAttr(value) { return esc(value); }
+async function safeJson(res) { try { return await res.json(); } catch(e) { return {}; } }
+let toastTimer;
+function toast(message,error=false) {
+  const el=document.getElementById('toast');
+  el.textContent=message;
+  el.className=error?'show error':'show';
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>el.className='',3200);
+}
 </script>
 </body>
 </html>
