@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.4.2 — 2026-08-11
+
+- Definitive release of the redesigned three-page dashboard and Linux safe mode.
+- Release pipeline can now publish from a merged `release: v*` pull request as well as a release push, avoiding missed release triggers.
+- Cross-platform binary matrix remains Linux x86_64, macOS Intel/Apple Silicon and Windows x86_64.
+
 ## v1.4.1 — 2026-08-11
 
 - Keeps the full v1.4 dashboard redesign and Linux `GLXBadWindow` safe-mode fix.
