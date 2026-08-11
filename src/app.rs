@@ -18,7 +18,6 @@ use crate::transforms;
 use crate::ui_bridge::{DaemonEvent, DaemonState, ProfileInfo, UiCommand};
 
 const MAX_RECORDING_SECS: u64 = 10 * 60;
-const CONFIG_REFRESH_INTERVAL_MS: u64 = 400;
 
 pub async fn run_with_ui(
     config: Arc<RwLock<ConfigV2>>,
@@ -31,6 +30,9 @@ pub async fn run_with_ui(
     let initial_hotkeys = parsed_hotkeys(&initial_cfg);
     let mut hotkey_signature = profile_hotkey_signature(&initial_cfg);
     let shared_hotkeys = input::SharedHotkeys::new(initial_hotkeys);
+    // Ignore a dirty edge caused by first-run creation/migration before the
+    // runtime starts. Future successful saves will produce a new edge.
+    let _ = crate::config::take_runtime_dirty();
 
     let (input_tx, mut input_rx): (InputTx, InputRx) = mpsc::channel(32);
 
@@ -68,20 +70,13 @@ pub async fn run_with_ui(
     info!(profiles = initial_cfg.profiles.len(), "Ready — hold hotkey to dictate.");
     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
 
-    let mut last_config_refresh = tokio::time::Instant::now();
-
     loop {
         if shutdown.load(Ordering::SeqCst) {
             info!("Shutting down gracefully.");
             return Ok(());
         }
 
-        // This small in-memory signature check deliberately stays simple: it
-        // avoids another runtime service/channel while still applying dashboard
-        // hotkey edits within a fraction of a second.
-        if last_config_refresh.elapsed()
-            >= std::time::Duration::from_millis(CONFIG_REFRESH_INTERVAL_MS)
-        {
+        if crate::config::take_runtime_dirty() {
             let cfg = config.read().await.clone();
             let signature = profile_hotkey_signature(&cfg);
             if signature != hotkey_signature {
@@ -99,7 +94,6 @@ pub async fn run_with_ui(
                 ));
                 info!("Runtime profile configuration refreshed");
             }
-            last_config_refresh = tokio::time::Instant::now();
         }
 
         while let Ok(command) = ui_rx.try_recv() {
@@ -200,7 +194,11 @@ async fn state_recording(
         configured_device.clone(),
     ) {
         Ok(handle) => handle,
-        Err(first_error) if configured_device.as_deref().is_some_and(|name| !name.is_empty() && name != "default") => {
+        Err(first_error)
+            if configured_device
+                .as_deref()
+                .is_some_and(|name| !name.is_empty() && name != "default") =>
+        {
             warn!(
                 device = configured_device.as_deref().unwrap_or_default(),
                 %first_error,
