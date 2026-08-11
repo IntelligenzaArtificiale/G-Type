@@ -1,160 +1,124 @@
-// injector.rs — Text injection via keystroke emulation with clipboard fallback.
-// Always tries to type character by character using enigo for maximum compatibility.
-// If the text is extremely long or injection fails, it falls back to clipboard injection.
+// injector.rs — Cross-platform text injection with conservative clipboard fallback.
 
 use anyhow::{Context, Result};
 use arboard::Clipboard;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use std::thread;
 use std::time::Duration;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
-/// Delay between individual keystrokes (ms) to avoid dropped input.
 const KEYSTROKE_DELAY_MS: u64 = 3;
-/// Delay after paste before restoring clipboard (ms).
-const PASTE_SETTLE_MS: u64 = 80;
-/// Threshold above which we consider text "too long" for keystrokes and use clipboard.
-const LONG_TEXT_THRESHOLD: usize = 500;
+const PRE_INJECT_SETTLE_MS: u64 = 80;
+const PASTE_SETTLE_MS: u64 = 250;
+const LONG_TEXT_THRESHOLD_CHARS: usize = 300;
 
 /// Inject text into the currently focused application.
 ///
-/// Strategy:
-/// 1. If text is very long (>500 chars), use clipboard injection directly.
-/// 2. Otherwise, try keystroke injection.
-/// 3. If keystroke injection fails, fallback to clipboard injection.
+/// Short, single-line ASCII text is typed directly. Unicode, multiline and
+/// longer text uses the clipboard path because it is more reliable across
+/// keyboard layouts, IMEs, browsers, IDEs, RDP/VM sessions and macOS/Windows.
 pub fn inject(text: &str) -> Result<()> {
     if text.is_empty() {
         debug!("Empty text, nothing to inject");
         return Ok(());
     }
 
-    if text.len() > LONG_TEXT_THRESHOLD {
-        debug!(
-            len = text.len(),
-            "Text is very long, using clipboard injection directly"
-        );
+    if should_use_clipboard(text) {
+        debug!(chars = text.chars().count(), "Using clipboard injection");
         return inject_clipboard(text);
     }
 
     match inject_keystrokes(text) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            warn!(%e, "Keystroke injection failed, falling back to clipboard");
+        Ok(()) => Ok(()),
+        Err(error) => {
+            warn!(%error, "Keystroke injection failed, falling back to clipboard");
             inject_clipboard(text)
         }
     }
 }
 
-/// Type text character by character using enigo.
+fn should_use_clipboard(text: &str) -> bool {
+    text.chars().count() > LONG_TEXT_THRESHOLD_CHARS
+        || !text.is_ascii()
+        || text.contains('\n')
+        || text.contains('\r')
+}
+
 fn inject_keystrokes(text: &str) -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| anyhow::anyhow!("Failed to initialize enigo: {:?}", e))?;
+        .map_err(|error| anyhow::anyhow!("Failed to initialize enigo: {:?}", error))?;
 
-    // Small delay before starting to let the OS settle after hotkey release
-    thread::sleep(Duration::from_millis(80));
+    thread::sleep(Duration::from_millis(PRE_INJECT_SETTLE_MS));
 
     let total = text.chars().count();
     let log_every = if total > 200 { total / 10 } else { usize::MAX };
 
-    for (i, ch) in text.chars().enumerate() {
-        if let Err(e) = enigo.text(&ch.to_string()) {
-            anyhow::bail!("Failed to type character '{}': {:?}", ch, e);
-        }
+    for (index, ch) in text.chars().enumerate() {
+        enigo
+            .text(&ch.to_string())
+            .map_err(|error| anyhow::anyhow!("Failed to type character {:?}: {:?}", ch, error))?;
         thread::sleep(Duration::from_millis(KEYSTROKE_DELAY_MS));
 
-        // Log progress every ~10% for long texts
-        if log_every != usize::MAX && (i + 1) % log_every == 0 {
-            let pct = ((i + 1) as f64 / total as f64 * 100.0) as u32;
-            debug!(progress = %format!("{}%", pct), chars = i + 1, total, "Injecting text...");
+        if log_every != usize::MAX && (index + 1) % log_every == 0 {
+            let pct = ((index + 1) as f64 / total as f64 * 100.0) as u32;
+            debug!(progress = %format!("{}%", pct), chars = index + 1, total, "Injecting text...");
         }
     }
 
-    debug!(len = text.len(), "Keystroke injection complete");
+    debug!(chars = total, "Keystroke injection complete");
     Ok(())
 }
 
-/// Inject text via clipboard: backup current clipboard, set new text, paste, restore.
 fn inject_clipboard(text: &str) -> Result<()> {
-    debug!(len = text.len(), "Using clipboard injection");
-
     let mut clipboard = Clipboard::new().context("Failed to access system clipboard")?;
-
-    // Step 1: Backup current clipboard contents
     let backup = clipboard.get_text().ok();
-    if backup.is_some() {
-        debug!("Clipboard backup saved");
-    }
 
-    // Step 2: Set new text in clipboard
     clipboard
         .set_text(text.to_string())
         .context("Failed to set clipboard text")?;
 
-    // Step 3: Simulate paste shortcut
+    // Give clipboard ownership a moment to propagate before asking the focused
+    // application to paste it.
+    thread::sleep(Duration::from_millis(30));
     paste_shortcut()?;
 
-    // Step 4: Wait for paste to settle
+    // Some applications consume clipboard contents asynchronously. Restoring
+    // immediately can make them paste the user's old clipboard instead.
     thread::sleep(Duration::from_millis(PASTE_SETTLE_MS));
 
-    // Step 5: Restore original clipboard
-    match backup {
-        Some(original) => {
-            // Re-acquire clipboard (it may have been released)
-            match Clipboard::new() {
-                Ok(mut cb) => {
-                    if let Err(e) = cb.set_text(original) {
-                        warn!(%e, "Failed to restore clipboard (non-fatal)");
-                    } else {
-                        debug!("Clipboard restored");
-                    }
-                }
-                Err(e) => {
-                    warn!(%e, "Failed to re-acquire clipboard for restore");
+    if let Some(original) = backup {
+        match Clipboard::new() {
+            Ok(mut cb) => {
+                if let Err(error) = cb.set_text(original) {
+                    warn!(%error, "Failed to restore clipboard (non-fatal)");
                 }
             }
-        }
-        None => {
-            debug!("No previous clipboard content to restore");
+            Err(error) => warn!(%error, "Failed to re-acquire clipboard for restore"),
         }
     }
 
-    debug!("Clipboard injection complete");
+    debug!(chars = text.chars().count(), "Clipboard injection complete");
     Ok(())
 }
 
-/// Send the OS-appropriate paste shortcut (CTRL+V on Linux/Windows, CMD+V on macOS).
 fn paste_shortcut() -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| anyhow::anyhow!("Failed to initialize enigo for paste: {:?}", e))?;
-
-    // Small delay to ensure clipboard is ready
-    thread::sleep(Duration::from_millis(20));
+        .map_err(|error| anyhow::anyhow!("Failed to initialize enigo for paste: {:?}", error))?;
 
     #[cfg(target_os = "macos")]
-    {
-        if let Err(e) = enigo.key(Key::Meta, Direction::Press) {
-            error!(?e, "Failed to press Meta key");
-        }
-        if let Err(e) = enigo.key(Key::Unicode('v'), Direction::Click) {
-            error!(?e, "Failed to press V key");
-        }
-        if let Err(e) = enigo.key(Key::Meta, Direction::Release) {
-            error!(?e, "Failed to release Meta key");
-        }
-    }
-
+    let modifier = Key::Meta;
     #[cfg(not(target_os = "macos"))]
-    {
-        if let Err(e) = enigo.key(Key::Control, Direction::Press) {
-            error!(?e, "Failed to press Control key");
-        }
-        if let Err(e) = enigo.key(Key::Unicode('v'), Direction::Click) {
-            error!(?e, "Failed to press V key");
-        }
-        if let Err(e) = enigo.key(Key::Control, Direction::Release) {
-            error!(?e, "Failed to release Control key");
-        }
-    }
+    let modifier = Key::Control;
+
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|error| anyhow::anyhow!("Failed to press paste modifier: {:?}", error))?;
+
+    let click_result = enigo.key(Key::Unicode('v'), Direction::Click);
+    let release_result = enigo.key(modifier, Direction::Release);
+
+    click_result.map_err(|error| anyhow::anyhow!("Failed to press paste key: {:?}", error))?;
+    release_result.map_err(|error| anyhow::anyhow!("Failed to release paste modifier: {:?}", error))?;
 
     debug!("Paste shortcut sent");
     Ok(())
@@ -165,14 +129,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_empty_text() {
-        let result = inject("");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_long_text_threshold() {
-        // Verify the constant is sane
-        assert_eq!(LONG_TEXT_THRESHOLD, 500);
+    fn clipboard_strategy_is_conservative() {
+        assert!(!should_use_clipboard("hello world"));
+        assert!(should_use_clipboard("ciao è già pronto"));
+        assert!(should_use_clipboard("prima riga\nseconda riga"));
+        assert!(should_use_clipboard(&"a".repeat(LONG_TEXT_THRESHOLD_CHARS + 1)));
     }
 }
