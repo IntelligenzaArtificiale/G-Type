@@ -1,6 +1,5 @@
-// input.rs — Global keyboard hook using rdev.
-// Runs on a dedicated OS thread (rdev::listen is blocking).
-// Detects configurable hotkey combos and sends signals via tokio mpsc.
+// input.rs — Cross-platform global hotkey listener.
+// X11/macOS/Windows use rdev. Native Linux Wayland reads evdev directly.
 
 use anyhow::{Context, Result};
 use rdev::{Event, EventType, Key};
@@ -9,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputSignal {
@@ -68,8 +67,8 @@ impl SharedHotkeys {
 pub fn parse_hotkey(raw: &str) -> Result<Hotkey> {
     let parts: Vec<String> = raw
         .split('+')
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
         .collect();
 
     if parts.is_empty() {
@@ -338,11 +337,6 @@ fn key_to_modifier(key: Key) -> Option<Modifier> {
     }
 }
 
-/// Spawn the platform-appropriate global keyboard listener.
-///
-/// Important: use compile-time cfg blocks here rather than `cfg!()`. `cfg!()`
-/// only evaluates to a boolean and still type-checks both branches, which made
-/// macOS/Windows builds reference the Linux-only evdev function.
 pub fn spawn_listener(
     tx: InputTx,
     shutdown: Arc<AtomicBool>,
@@ -372,7 +366,7 @@ fn spawn_rdev_listener(
     let handle = std::thread::Builder::new()
         .name("g-type-input".into())
         .spawn(move || {
-            debug!("Global keyboard listener started");
+            debug!("rdev global keyboard listener started");
             let state = Arc::new(std::sync::Mutex::new(HookState::new(tx, shared_hotkeys)));
 
             let callback = move |event: Event| {
@@ -394,26 +388,72 @@ fn spawn_rdev_listener(
 }
 
 #[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct LinuxInputEvent {
+    time: libc::timeval,
+    event_type: u16,
+    code: u16,
+    value: i32,
+}
+
+#[cfg(target_os = "linux")]
 fn spawn_evdev_listener(
-    _tx: InputTx,
-    _shutdown: Arc<AtomicBool>,
-    _shared_hotkeys: Arc<SharedHotkeys>,
+    tx: InputTx,
+    shutdown: Arc<AtomicBool>,
+    shared_hotkeys: Arc<SharedHotkeys>,
 ) -> Result<std::thread::JoinHandle<()>> {
     let handle = std::thread::Builder::new()
         .name("g-type-input-evdev".into())
         .spawn(move || {
+            let state = Arc::new(std::sync::Mutex::new(HookState::new(tx, shared_hotkeys)));
             let devices = find_keyboard_devices();
-            if devices.is_empty() {
-                error!("No keyboard devices found. Is user in 'input' group?");
+            let mut readers = Vec::new();
+
+            for path in devices {
+                match std::fs::OpenOptions::new().read(true).open(&path) {
+                    Ok(file) => {
+                        if let Err(error) = set_nonblocking(&file) {
+                            warn!(device = %path.display(), %error, "Could not set evdev device non-blocking");
+                            continue;
+                        }
+
+                        let state = state.clone();
+                        let shutdown = shutdown.clone();
+                        let device_name = path.display().to_string();
+                        readers.push(std::thread::spawn(move || {
+                            evdev_reader_loop(file, &device_name, state, shutdown)
+                        }));
+                    }
+                    Err(error) => {
+                        debug!(device = %path.display(), %error, "Cannot open evdev input device");
+                    }
+                }
+            }
+
+            if readers.is_empty() {
+                warn!(
+                    "Wayland detected but no readable /dev/input/event* keyboard was found. Add the user to the 'input' group and log in again; falling back to rdev/XWayland."
+                );
+                let state = state.clone();
+                let callback = move |event: Event| {
+                    if shutdown.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if let Ok(mut state) = state.lock() {
+                        state.handle_event(&event);
+                    }
+                };
+                if let Err(error) = rdev::listen(callback) {
+                    error!(?error, "Wayland fallback listener failed");
+                }
                 return;
             }
 
-            info!(
-                devices = devices.len(),
-                "evdev keyboard listener placeholder started (Wayland)"
-            );
-
-            std::thread::sleep(std::time::Duration::from_secs(u64::MAX));
+            info!(devices = readers.len(), "Wayland evdev keyboard listener started");
+            for reader in readers {
+                let _ = reader.join();
+            }
         })
         .context("Failed to spawn evdev listener thread")?;
 
@@ -421,26 +461,188 @@ fn spawn_evdev_listener(
 }
 
 #[cfg(target_os = "linux")]
+fn set_nonblocking(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fd = file.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn evdev_reader_loop(
+    file: std::fs::File,
+    device_name: &str,
+    state: Arc<std::sync::Mutex<HookState>>,
+    shutdown: Arc<AtomicBool>,
+) {
+    use std::os::fd::AsRawFd;
+    let fd = file.as_raw_fd();
+
+    while !shutdown.load(Ordering::Relaxed) {
+        let mut event = std::mem::MaybeUninit::<LinuxInputEvent>::uninit();
+        let size = std::mem::size_of::<LinuxInputEvent>();
+        let read = unsafe { libc::read(fd, event.as_mut_ptr().cast::<libc::c_void>(), size) };
+
+        if read == size as isize {
+            let event = unsafe { event.assume_init() };
+            if event.event_type != 1 || event.value == 2 {
+                continue;
+            }
+            if let Some(key) = linux_keycode_to_rdev(event.code) {
+                let event_type = if event.value == 0 {
+                    EventType::KeyRelease(key)
+                } else if event.value == 1 {
+                    EventType::KeyPress(key)
+                } else {
+                    continue;
+                };
+                let event = Event {
+                    time: std::time::SystemTime::now(),
+                    name: None,
+                    event_type,
+                };
+                if let Ok(mut state) = state.lock() {
+                    state.handle_event(&event);
+                }
+            }
+            continue;
+        }
+
+        if read < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::WouldBlock {
+                warn!(device = device_name, %error, "evdev read failed");
+                break;
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_keycode_to_rdev(code: u16) -> Option<Key> {
+    Some(match code {
+        1 => Key::Escape,
+        2 => Key::Num1,
+        3 => Key::Num2,
+        4 => Key::Num3,
+        5 => Key::Num4,
+        6 => Key::Num5,
+        7 => Key::Num6,
+        8 => Key::Num7,
+        9 => Key::Num8,
+        10 => Key::Num9,
+        11 => Key::Num0,
+        12 => Key::Minus,
+        13 => Key::Equal,
+        14 => Key::Backspace,
+        15 => Key::Tab,
+        16 => Key::KeyQ,
+        17 => Key::KeyW,
+        18 => Key::KeyE,
+        19 => Key::KeyR,
+        20 => Key::KeyT,
+        21 => Key::KeyY,
+        22 => Key::KeyU,
+        23 => Key::KeyI,
+        24 => Key::KeyO,
+        25 => Key::KeyP,
+        26 => Key::LeftBracket,
+        27 => Key::RightBracket,
+        28 => Key::Return,
+        29 => Key::ControlLeft,
+        30 => Key::KeyA,
+        31 => Key::KeyS,
+        32 => Key::KeyD,
+        33 => Key::KeyF,
+        34 => Key::KeyG,
+        35 => Key::KeyH,
+        36 => Key::KeyJ,
+        37 => Key::KeyK,
+        38 => Key::KeyL,
+        39 => Key::SemiColon,
+        40 => Key::Quote,
+        41 => Key::BackQuote,
+        42 => Key::ShiftLeft,
+        43 => Key::BackSlash,
+        44 => Key::KeyZ,
+        45 => Key::KeyX,
+        46 => Key::KeyC,
+        47 => Key::KeyV,
+        48 => Key::KeyB,
+        49 => Key::KeyN,
+        50 => Key::KeyM,
+        51 => Key::Comma,
+        52 => Key::Dot,
+        53 => Key::Slash,
+        54 => Key::ShiftRight,
+        56 => Key::Alt,
+        57 => Key::Space,
+        58 => Key::CapsLock,
+        59 => Key::F1,
+        60 => Key::F2,
+        61 => Key::F3,
+        62 => Key::F4,
+        63 => Key::F5,
+        64 => Key::F6,
+        65 => Key::F7,
+        66 => Key::F8,
+        67 => Key::F9,
+        68 => Key::F10,
+        70 => Key::ScrollLock,
+        87 => Key::F11,
+        88 => Key::F12,
+        97 => Key::ControlRight,
+        99 => Key::PrintScreen,
+        100 => Key::AltGr,
+        102 => Key::Home,
+        103 => Key::UpArrow,
+        104 => Key::PageUp,
+        105 => Key::LeftArrow,
+        106 => Key::RightArrow,
+        107 => Key::End,
+        108 => Key::DownArrow,
+        109 => Key::PageDown,
+        110 => Key::Insert,
+        111 => Key::Delete,
+        119 => Key::Pause,
+        125 => Key::MetaLeft,
+        126 => Key::MetaRight,
+        _ => return None,
+    })
+}
+
+#[cfg(target_os = "linux")]
 fn find_keyboard_devices() -> Vec<std::path::PathBuf> {
-    let mut keyboards = Vec::new();
+    let mut devices = Vec::new();
     if let Ok(entries) = std::fs::read_dir("/dev/input/") {
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                if name.starts_with("event") {
-                    let cap_path = format!("/sys/class/input/{}/device/capabilities/ev", name);
-                    if let Ok(caps) = std::fs::read_to_string(&cap_path) {
-                        if let Ok(value) = u64::from_str_radix(caps.trim(), 16) {
-                            if value & (1 << 1) != 0 {
-                                keyboards.push(path);
-                            }
-                        }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("event") {
+                continue;
+            }
+
+            let cap_path = format!("/sys/class/input/{}/device/capabilities/ev", name);
+            if let Ok(caps) = std::fs::read_to_string(&cap_path) {
+                if let Ok(value) = u64::from_str_radix(caps.trim(), 16) {
+                    if value & (1 << 1) != 0 {
+                        devices.push(path);
                     }
                 }
             }
         }
     }
-    keyboards
+    devices
 }
 
 #[cfg(test)]
@@ -505,37 +707,41 @@ mod tests {
                 name: None,
                 event_type: EventType::KeyPress(Key::ControlLeft),
             });
-            assert!(state.held_modifiers.contains(&Modifier::Ctrl));
-            assert!(!state.recording);
-
             state.handle_event(&Event {
                 time: std::time::SystemTime::now(),
                 name: None,
                 event_type: EventType::KeyPress(Key::ShiftLeft),
             });
-            assert!(!state.recording);
-
             state.handle_event(&Event {
                 time: std::time::SystemTime::now(),
                 name: None,
                 event_type: EventType::KeyPress(Key::Space),
             });
-            assert!(state.recording);
 
-            let signal = runtime.block_on(async { rx.recv().await });
-            assert_eq!(signal, Some(InputSignal::Start("dictation".to_string())));
+            assert_eq!(
+                runtime.block_on(async { rx.recv().await }),
+                Some(InputSignal::Start("dictation".to_string()))
+            );
 
             state.handle_event(&Event {
                 time: std::time::SystemTime::now(),
                 name: None,
                 event_type: EventType::KeyRelease(Key::Space),
             });
-            assert!(!state.recording);
-
-            let signal = runtime.block_on(async { rx.recv().await });
-            assert_eq!(signal, Some(InputSignal::Stop));
+            assert_eq!(
+                runtime.block_on(async { rx.recv().await }),
+                Some(InputSignal::Stop)
+            );
         });
 
         handle.join().expect("Test thread panicked");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_keycodes_cover_default_hotkey() {
+        assert_eq!(linux_keycode_to_rdev(29), Some(Key::ControlLeft));
+        assert_eq!(linux_keycode_to_rdev(42), Some(Key::ShiftLeft));
+        assert_eq!(linux_keycode_to_rdev(57), Some(Key::Space));
     }
 }

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.4.4 — 2026-08-11
+
+- Fixes dashboard transcription copy failures caused by embedding arbitrary transcript text inside inline JavaScript attributes; UI actions now use safe event delegation and a clipboard fallback.
+- Makes all active transcription log truncation UTF-8 safe, including accented characters and emoji, and removes the obsolete duplicate Gemini network implementation.
+- Applies each profile's configured request timeout to Gemini, honors custom prompts end-to-end, and keeps API/rate-limit errors out of the text injection path.
+- Persists configuration through temporary-file + sync + backup replacement and automatically recovers from a valid backup if the primary TOML becomes unreadable.
+- Makes text injection more reliable for Unicode, multiline text and slower applications by using a conservative clipboard strategy with safer settling times.
+- Adds a recording watchdog and cleaner failure paths so a lost hotkey release or input-channel failure cannot leave an unbounded recording running.
+- Falls back to the system microphone when a configured audio device has disappeared or been renamed.
+- Implements a real Linux Wayland evdev hotkey listener with XWayland/rdev fallback when evdev devices are not readable.
+- Keeps the existing Linux overlay safe mode and cross-platform CI matrix for Linux, Windows, macOS Intel and macOS Apple Silicon.
+
 ## v1.4.3 — 2026-08-11
 
 - Fixes macOS/Windows compilation of the global input listener by using compile-time platform selection instead of `cfg!()` around the Linux-only evdev path.

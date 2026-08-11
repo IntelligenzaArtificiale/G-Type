@@ -1,6 +1,6 @@
 // app.rs — Finite State Machine orchestrating the G-Type daemon.
 // States: Idle → Recording → Processing → Injecting → Idle
-// All inter-thread communication via tokio::sync::mpsc channels.
+// All inter-thread communication via channels; failures return safely to Idle.
 
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,11 +17,8 @@ use crate::providers;
 use crate::transforms;
 use crate::ui_bridge::{DaemonEvent, DaemonState, ProfileInfo, UiCommand};
 
-/// Run the main event loop.
-///
-/// The configuration is shared with the web settings server. Changes made from
-/// the dashboard are picked up at runtime, including profile hotkeys, without
-/// requiring a daemon restart.
+const MAX_RECORDING_SECS: u64 = 10 * 60;
+
 pub async fn run_with_ui(
     config: Arc<RwLock<ConfigV2>>,
     ui_proxy: EventLoopProxy<DaemonEvent>,
@@ -33,6 +30,9 @@ pub async fn run_with_ui(
     let initial_hotkeys = parsed_hotkeys(&initial_cfg);
     let mut hotkey_signature = profile_hotkey_signature(&initial_cfg);
     let shared_hotkeys = input::SharedHotkeys::new(initial_hotkeys);
+    // Ignore a dirty edge caused by first-run creation/migration before the
+    // runtime starts. Future successful saves will produce a new edge.
+    let _ = crate::config::take_runtime_dirty();
 
     let (input_tx, mut input_rx): (InputTx, InputRx) = mpsc::channel(32);
 
@@ -54,7 +54,7 @@ pub async fn run_with_ui(
             tokio::select! {
                 _ = ctrl_c => {},
                 _ = async {
-                    if let Some(ref mut s) = sigterm { s.recv().await; }
+                    if let Some(ref mut signal) = sigterm { signal.recv().await; }
                     else { std::future::pending::<()>().await; }
                 } => {},
             }
@@ -70,17 +70,13 @@ pub async fn run_with_ui(
     info!(profiles = initial_cfg.profiles.len(), "Ready — hold hotkey to dictate.");
     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
 
-    let mut last_config_refresh = tokio::time::Instant::now();
-    let ui_rx = ui_rx;
-
     loop {
         if shutdown.load(Ordering::SeqCst) {
             info!("Shutting down gracefully.");
             return Ok(());
         }
 
-        // Refresh hotkeys periodically so dashboard edits become active live.
-        if last_config_refresh.elapsed() >= std::time::Duration::from_millis(400) {
+        if crate::config::take_runtime_dirty() {
             let cfg = config.read().await.clone();
             let signature = profile_hotkey_signature(&cfg);
             if signature != hotkey_signature {
@@ -89,24 +85,23 @@ pub async fn run_with_ui(
                 let _ = ui_proxy.send_event(DaemonEvent::ProfilesUpdated(
                     cfg.profiles
                         .iter()
-                        .map(|p| ProfileInfo {
-                            name: p.name.clone(),
-                            model_name: p.model.clone(),
+                        .map(|profile| ProfileInfo {
+                            name: profile.name.clone(),
+                            model_name: profile.model.clone(),
                             active: false,
                         })
                         .collect(),
                 ));
                 info!("Runtime profile configuration refreshed");
             }
-            last_config_refresh = tokio::time::Instant::now();
         }
 
-        while let Ok(cmd) = ui_rx.try_recv() {
-            match cmd {
+        while let Ok(command) = ui_rx.try_recv() {
+            match command {
                 UiCommand::Quit => shutdown.store(true, Ordering::SeqCst),
                 UiCommand::OpenSettings => {
-                    if let Err(e) = open::that("http://127.0.0.1:9741") {
-                        error!("Failed to open settings: {}", e);
+                    if let Err(error) = open::that("http://127.0.0.1:9741") {
+                        error!(%error, "Failed to open settings");
                     }
                 }
                 UiCommand::SwitchProfile(name) => {
@@ -121,7 +116,7 @@ pub async fn run_with_ui(
                 let profile = snapshot
                     .profiles
                     .iter()
-                    .find(|p| p.name == profile_name)
+                    .find(|profile| profile.name == profile_name)
                     .cloned();
 
                 if let Some(profile) = profile {
@@ -163,10 +158,10 @@ fn parsed_hotkeys(config: &ConfigV2) -> Vec<(input::Hotkey, String)> {
     config
         .profiles
         .iter()
-        .filter_map(|p| match input::parse_hotkey(&p.hotkey) {
-            Ok(hk) => Some((hk, p.name.clone())),
-            Err(e) => {
-                warn!(profile = %p.name, hotkey = %p.hotkey, %e, "Ignoring invalid hotkey");
+        .filter_map(|profile| match input::parse_hotkey(&profile.hotkey) {
+            Ok(hotkey) => Some((hotkey, profile.name.clone())),
+            Err(error) => {
+                warn!(profile = %profile.name, hotkey = %profile.hotkey, %error, "Ignoring invalid hotkey");
                 None
             }
         })
@@ -177,7 +172,7 @@ fn profile_hotkey_signature(config: &ConfigV2) -> Vec<(String, String)> {
     config
         .profiles
         .iter()
-        .map(|p| (p.name.clone(), p.hotkey.clone()))
+        .map(|profile| (profile.name.clone(), profile.hotkey.clone()))
         .collect()
 }
 
@@ -191,20 +186,44 @@ async fn state_recording(
 
     let (audio_tx, audio_rx) = audio::audio_channel();
     let recording_flag = Arc::new(AtomicBool::new(true));
+    let configured_device = config.global.audio_device.clone();
 
-    let recording_flag_clone = recording_flag.clone();
     let audio_thread_handle = match audio::start_capture(
-        audio_tx,
-        recording_flag_clone,
-        config.global.audio_device.clone(),
+        audio_tx.clone(),
+        recording_flag.clone(),
+        configured_device.clone(),
     ) {
         Ok(handle) => handle,
-        Err(e) => {
-            error!(%e, "Failed to start audio capture");
-            warn!("Returning to idle due to audio capture failure");
+        Err(first_error)
+            if configured_device
+                .as_deref()
+                .is_some_and(|name| !name.is_empty() && name != "default") =>
+        {
+            warn!(
+                device = configured_device.as_deref().unwrap_or_default(),
+                %first_error,
+                "Configured microphone unavailable; falling back to system default"
+            );
+            match audio::start_capture(audio_tx.clone(), recording_flag.clone(), None) {
+                Ok(handle) => handle,
+                Err(fallback_error) => {
+                    error!(%fallback_error, "Failed to start fallback audio capture");
+                    if config.global.sound_enabled {
+                        crate::audio_feedback::play_error_beep();
+                    }
+                    return;
+                }
+            }
+        }
+        Err(error) => {
+            error!(%error, "Failed to start audio capture");
+            if config.global.sound_enabled {
+                crate::audio_feedback::play_error_beep();
+            }
             return;
         }
     };
+    drop(audio_tx);
 
     let collector_handle = tokio::task::spawn_blocking(move || {
         let mut all_samples = Vec::<i16>::with_capacity(480_000);
@@ -214,31 +233,47 @@ async fn state_recording(
         all_samples
     });
 
+    let watchdog = tokio::time::sleep(std::time::Duration::from_secs(MAX_RECORDING_SECS));
+    tokio::pin!(watchdog);
+    let mut can_transcribe = true;
+
     loop {
-        match input_rx.recv().await {
-            Some(InputSignal::Stop) => break,
-            Some(InputSignal::Start(_)) => continue,
-            None => {
-                error!("Input channel closed during recording");
-                recording_flag.store(false, Ordering::Relaxed);
-                collector_handle.abort();
-                return;
+        tokio::select! {
+            signal = input_rx.recv() => {
+                match signal {
+                    Some(InputSignal::Stop) => break,
+                    Some(InputSignal::Start(_)) => continue,
+                    None => {
+                        error!("Input channel closed during recording");
+                        can_transcribe = false;
+                        break;
+                    }
+                }
+            }
+            _ = &mut watchdog => {
+                warn!(max_seconds = MAX_RECORDING_SECS, "Recording watchdog reached; stopping capture safely");
+                break;
             }
         }
     }
 
     recording_flag.store(false, Ordering::Relaxed);
 
+    if let Err(error) = audio_thread_handle.join() {
+        error!("Audio capture thread panicked: {:?}", error);
+        can_transcribe = false;
+    }
+
     let all_samples = match collector_handle.await {
         Ok(samples) => samples,
-        Err(e) => {
-            error!(%e, "Audio collector task failed");
+        Err(error) => {
+            error!(%error, "Audio collector task failed");
             return;
         }
     };
 
-    if let Err(e) = audio_thread_handle.join() {
-        error!("Audio capture thread panicked: {:?}", e);
+    if !can_transcribe {
+        return;
     }
 
     let duration = all_samples.len() as f64 / 16_000.0;
@@ -249,6 +284,9 @@ async fn state_recording(
 
     if all_samples.is_empty() {
         warn!("No audio captured, skipping transcription");
+        if config.global.sound_enabled {
+            crate::audio_feedback::play_error_beep();
+        }
         return;
     }
 
@@ -257,9 +295,9 @@ async fn state_recording(
     }));
 
     let provider = match providers::create_provider(profile, &config.keys) {
-        Ok(p) => p,
-        Err(e) => {
-            error!(%e, "Failed to create provider");
+        Ok(provider) => provider,
+        Err(error) => {
+            error!(%error, "Failed to create provider");
             if config.global.sound_enabled {
                 crate::audio_feedback::play_error_beep();
             }
@@ -272,8 +310,8 @@ async fn state_recording(
         .await
     {
         Ok(result) => result,
-        Err(e) => {
-            error!(%e, "Transcription failed");
+        Err(error) => {
+            error!(%error, "Transcription failed");
             if config.global.sound_enabled {
                 crate::audio_feedback::play_error_beep();
             }
@@ -297,12 +335,17 @@ async fn state_recording(
         transcription.clone()
     };
 
+    if final_text.trim().is_empty() {
+        warn!("Transforms produced empty text, skipping injection");
+        return;
+    }
+
     let record = crate::tracking::build_record(&profile.model, duration, &usage, &final_text);
     let log_line = crate::tracking::format_log_line(&record, &config.global.currency);
     info!("{}", log_line);
 
-    if let Err(e) = crate::tracking::append_record(&record) {
-        warn!(%e, "Failed to save tracking record (non-fatal)");
+    if let Err(error) = crate::tracking::append_record(&record) {
+        warn!(%error, "Failed to save tracking record (non-fatal)");
     }
 
     let text = final_text.clone();
@@ -310,12 +353,21 @@ async fn state_recording(
 
     match inject_result {
         Ok(Ok(())) => info!(text = %truncate(&final_text, 80), "✅ Injected"),
-        Ok(Err(e)) => error!(%e, "Text injection failed"),
-        Err(e) => error!(%e, "Injection task panicked"),
+        Ok(Err(error)) => {
+            error!(%error, "Text injection failed");
+            if config.global.sound_enabled {
+                crate::audio_feedback::play_error_beep();
+            }
+        }
+        Err(error) => {
+            error!(%error, "Injection task panicked");
+            if config.global.sound_enabled {
+                crate::audio_feedback::play_error_beep();
+            }
+        }
     }
 }
 
-/// UTF-8 safe truncation for log display.
 fn truncate(s: &str, max_chars: usize) -> String {
     let mut chars = s.chars();
     let prefix: String = chars.by_ref().take(max_chars).collect();
@@ -340,5 +392,6 @@ mod tests {
     fn test_truncate_utf8_is_char_boundary_safe() {
         assert_eq!(truncate("A me così è già", 8), "A me cos…");
         assert_eq!(truncate("èèè", 2), "èè…");
+        assert_eq!(truncate("🙂🙂🙂", 2), "🙂🙂…");
     }
 }

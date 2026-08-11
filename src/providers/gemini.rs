@@ -1,6 +1,6 @@
-// network.rs — HTTP client for Gemini generateContent REST API.
-// Records audio → encodes as WAV base64 → sends to Gemini → returns transcription text.
-// No WebSocket, no streaming — simple and reliable.
+// gemini.rs — Gemini generateContent REST provider for voice transcription.
+// Keeps transport failures separate from transcription text so errors are never
+// injected into the user's focused application.
 
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -13,25 +13,39 @@ use tracing::{debug, error, warn};
 
 use crate::tracking::TokenUsage;
 
+const MIN_TIMEOUT_SECS: u64 = 3;
+const MAX_TIMEOUT_SECS: u64 = 180;
+
 pub struct GeminiProvider {
     pub api_key: String,
     pub model: String,
+    timeout_secs: u64,
+    custom_prompt: Option<String>,
 }
 
 impl GeminiProvider {
-    pub fn new(api_key: String, model: String) -> Self {
-        Self { api_key, model }
+    pub fn new(
+        api_key: String,
+        model: String,
+        timeout_secs: u64,
+        custom_prompt: Option<String>,
+    ) -> Self {
+        Self {
+            api_key,
+            model,
+            timeout_secs: timeout_secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS),
+            custom_prompt,
+        }
     }
 }
 
-/// HTTP client singleton with retry middleware.
-fn http_client() -> Result<ClientWithMiddleware> {
+fn http_client(timeout_secs: u64) -> Result<ClientWithMiddleware> {
     let reqwest_client = Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
         .context("Failed to build HTTP client")?;
 
-    // Retry policy: up to 3 retries with exponential backoff
     let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
 
     Ok(ClientBuilder::new(reqwest_client)
@@ -44,15 +58,18 @@ impl GeminiProvider {
         if samples.is_empty() {
             bail!("No audio samples to transcribe");
         }
+        if self.api_key.trim().is_empty() {
+            bail!("Gemini API key is not configured");
+        }
 
         let duration_secs = samples.len() as f64 / 16_000.0;
         debug!(
             samples = samples.len(),
             duration_secs = format!("{:.1}", duration_secs),
+            timeout_secs = self.timeout_secs,
             "Sending audio to Gemini API"
         );
 
-        // Step 1: Encode PCM samples as WAV in memory
         let wav_bytes = encode_wav(samples);
         let wav_b64 = BASE64.encode(&wav_bytes);
 
@@ -62,19 +79,20 @@ impl GeminiProvider {
             "Audio encoded as WAV"
         );
 
-        // Step 2: Build the API request
         let model_name = self.model.strip_prefix("models/").unwrap_or(&self.model);
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
             model_name
         );
-        let body = build_request_body(&wav_b64, language);
+        let body = build_request_body(
+            &wav_b64,
+            language,
+            self.custom_prompt.as_deref(),
+        );
 
         debug!(model = %self.model, "Sending request to Gemini API");
 
-        // Step 3: Send HTTP POST (with auto-retry for 429/503)
-        // API key is sent via header, never in URL (security best practice).
-        let client = http_client()?;
+        let client = http_client(self.timeout_secs)?;
         let response = client
             .post(&url)
             .header("Content-Type", "application/json")
@@ -94,34 +112,21 @@ impl GeminiProvider {
 
         if !status.is_success() {
             error!(status = %status, body = %truncate_str(&response_text, 500), "Gemini API error");
-            // Return a user-friendly error message that will be injected
-            let error_usage = TokenUsage::default();
-            if status.as_u16() == 429 {
-                return Ok((
-                    "[Errore: Troppe richieste (429). Attendi qualche secondo e riprova]".to_string(),
-                    error_usage,
-                ));
-            } else if status.as_u16() == 403 {
-                return Ok((
-                    "[Errore: API Key non valida o permessi insufficienti (403)]".to_string(),
-                    error_usage,
-                ));
-            } else {
-                return Ok((format!("[Errore API Gemini: {}]", status), error_usage));
+            match status.as_u16() {
+                401 | 403 => bail!("Gemini API key non valida o permessi insufficienti ({status})"),
+                429 => bail!("Gemini rate limit raggiunto (429). Riprova tra qualche secondo"),
+                500..=599 => bail!("Gemini temporaneamente non disponibile ({status})"),
+                _ => bail!("Gemini API returned {status}"),
             }
         }
 
-        // Step 4: Parse the response
         let parsed: Value =
             serde_json::from_str(&response_text).context("Failed to parse Gemini API JSON response")?;
-
-        // Extract token usage from usageMetadata
         let usage = extract_usage(&parsed);
-
         let transcription = extract_text(&parsed)?;
 
         debug!(
-            text_len = transcription.len(),
+            text_len = transcription.chars().count(),
             text_preview = %truncate_str(&transcription, 80),
             prompt_tokens = usage.prompt_tokens,
             output_tokens = usage.candidates_tokens,
@@ -132,15 +137,17 @@ impl GeminiProvider {
     }
 }
 
-/// Build the JSON body for Gemini generateContent with inline audio.
-fn build_request_body(wav_b64: &str, language: &str) -> Value {
-    let prompt = crate::config::transcription_prompt(language);
+fn build_request_body(wav_b64: &str, language: &str, custom_prompt: Option<&str>) -> Value {
+    let prompt = custom_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::config::transcription_prompt(language));
+
     json!({
         "contents": [{
             "parts": [
-                {
-                    "text": prompt
-                },
+                { "text": prompt },
                 {
                     "inlineData": {
                         "mimeType": "audio/wav",
@@ -156,7 +163,6 @@ fn build_request_body(wav_b64: &str, language: &str) -> Value {
     })
 }
 
-/// Extract token usage from the Gemini response's `usageMetadata` field.
 fn extract_usage(response: &Value) -> TokenUsage {
     if let Some(meta) = response.get("usageMetadata") {
         TokenUsage {
@@ -178,18 +184,23 @@ fn extract_usage(response: &Value) -> TokenUsage {
     }
 }
 
-/// Extract text from Gemini generateContent response.
 fn extract_text(response: &Value) -> Result<String> {
-    // Standard response format:
-    // { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }
+    if let Some(error) = response.get("error") {
+        let msg = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown Gemini API error");
+        bail!("Gemini API error: {msg}");
+    }
+
     if let Some(candidates) = response.get("candidates").and_then(|c| c.as_array()) {
         if let Some(first) = candidates.first() {
             if let Some(content) = first.get("content") {
                 if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
                     let mut text = String::new();
                     for part in parts {
-                        if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                            text.push_str(t);
+                        if let Some(value) = part.get("text").and_then(|value| value.as_str()) {
+                            text.push_str(value);
                         }
                     }
                     if !text.is_empty() {
@@ -198,23 +209,12 @@ fn extract_text(response: &Value) -> Result<String> {
                 }
             }
 
-            // Check for safety/block reasons
             if let Some(reason) = first.get("finishReason").and_then(|r| r.as_str()) {
                 if reason != "STOP" {
                     warn!(reason, "Gemini response had non-STOP finish reason");
                 }
             }
         }
-    }
-
-    // Check for error in response
-    if let Some(error) = response.get("error") {
-        let msg = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("Unknown API error");
-        error!("Gemini API error: {}", msg);
-        return Ok(format!("[Errore API Gemini: {}]", msg));
     }
 
     warn!(
@@ -224,7 +224,6 @@ fn extract_text(response: &Value) -> Result<String> {
     Ok(String::new())
 }
 
-/// Encode PCM i16 mono 16kHz samples as a WAV file in memory.
 pub fn encode_wav(samples: &[i16]) -> Vec<u8> {
     let num_channels: u16 = 1;
     let sample_rate: u32 = 16_000;
@@ -232,30 +231,23 @@ pub fn encode_wav(samples: &[i16]) -> Vec<u8> {
     let byte_rate = sample_rate * (num_channels as u32) * (bits_per_sample as u32 / 8);
     let block_align = num_channels * (bits_per_sample / 8);
     let data_size = (samples.len() * 2) as u32;
-    let file_size = 36 + data_size; // RIFF header is 44 bytes, file_size = total - 8
+    let file_size = 36 + data_size;
 
     let mut buf = Vec::with_capacity(44 + data_size as usize);
-
-    // RIFF header
     buf.extend_from_slice(b"RIFF");
     buf.extend_from_slice(&file_size.to_le_bytes());
     buf.extend_from_slice(b"WAVE");
-
-    // fmt sub-chunk
     buf.extend_from_slice(b"fmt ");
-    buf.extend_from_slice(&16u32.to_le_bytes()); // sub-chunk size (PCM = 16)
-    buf.extend_from_slice(&1u16.to_le_bytes()); // audio format (PCM = 1)
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes());
     buf.extend_from_slice(&num_channels.to_le_bytes());
     buf.extend_from_slice(&sample_rate.to_le_bytes());
     buf.extend_from_slice(&byte_rate.to_le_bytes());
     buf.extend_from_slice(&block_align.to_le_bytes());
     buf.extend_from_slice(&bits_per_sample.to_le_bytes());
-
-    // data sub-chunk
     buf.extend_from_slice(b"data");
     buf.extend_from_slice(&data_size.to_le_bytes());
 
-    // PCM samples (little-endian i16)
     for &sample in samples {
         buf.extend_from_slice(&sample.to_le_bytes());
     }
@@ -263,12 +255,13 @@ pub fn encode_wav(samples: &[i16]) -> Vec<u8> {
     buf
 }
 
-/// Truncate a string for display.
-fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let mut chars = s.chars();
+    let prefix: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}…", prefix)
     } else {
-        format!("{}…", &s[..max])
+        prefix
     }
 }
 
@@ -278,30 +271,26 @@ mod tests {
 
     #[test]
     fn test_encode_wav_header() {
-        let samples: Vec<i16> = vec![0; 1600]; // 100ms at 16kHz
+        let samples: Vec<i16> = vec![0; 1600];
         let wav = encode_wav(&samples);
-
-        // Check RIFF header
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(&wav[12..16], b"fmt ");
         assert_eq!(&wav[36..40], b"data");
-
-        // Data size should be samples * 2 bytes
         let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
-        assert_eq!(data_size, 3200); // 1600 samples * 2 bytes
+        assert_eq!(data_size, 3200);
     }
 
     #[test]
     fn test_encode_wav_total_size() {
         let samples: Vec<i16> = vec![100, -100, 0, i16::MAX, i16::MIN];
         let wav = encode_wav(&samples);
-        assert_eq!(wav.len(), 44 + samples.len() * 2); // 44 header + data
+        assert_eq!(wav.len(), 44 + samples.len() * 2);
     }
 
     #[test]
-    fn test_build_request_body() {
-        let body = build_request_body("dGVzdA==", "auto");
+    fn test_build_request_body_default_prompt() {
+        let body = build_request_body("dGVzdA==", "auto", None);
         assert_eq!(
             body["contents"][0]["parts"][1]["inlineData"]["mimeType"],
             "audio/wav"
@@ -314,56 +303,51 @@ mod tests {
     }
 
     #[test]
+    fn test_build_request_body_custom_prompt() {
+        let body = build_request_body("dGVzdA==", "it", Some("Scrivi solo il testo"));
+        assert_eq!(body["contents"][0]["parts"][0]["text"], "Scrivi solo il testo");
+    }
+
+    #[test]
     fn test_extract_text_success() {
         let response = json!({
             "candidates": [{
-                "content": {
-                    "parts": [{"text": "ciao mondo"}]
-                },
+                "content": { "parts": [{"text": "ciao mondo"}] },
                 "finishReason": "STOP"
             }]
         });
-        let text = extract_text(&response).unwrap();
-        assert_eq!(text, "ciao mondo");
+        assert_eq!(extract_text(&response).unwrap(), "ciao mondo");
     }
 
     #[test]
     fn test_extract_text_empty() {
-        let response = json!({
-            "candidates": [{
-                "content": {
-                    "parts": []
-                }
-            }]
-        });
-        let text = extract_text(&response).unwrap();
-        assert!(text.is_empty());
+        let response = json!({"candidates": [{"content": {"parts": []}}]});
+        assert!(extract_text(&response).unwrap().is_empty());
     }
 
     #[test]
-    fn test_extract_text_api_error() {
-        let response = json!({
-            "error": {
-                "message": "API key invalid",
-                "code": 403
-            }
-        });
-        let result = extract_text(&response);
-        assert!(result.is_ok());
-        assert!(result.unwrap().contains("API key invalid"));
+    fn test_extract_text_api_error_is_error() {
+        let response = json!({"error": {"message": "API key invalid", "code": 403}});
+        assert!(extract_text(&response).is_err());
     }
 
     #[test]
-    fn test_truncate_str() {
+    fn test_truncate_str_ascii() {
         assert_eq!(truncate_str("hello", 10), "hello");
-        assert_eq!(truncate_str("hello world", 5), "hello\u{2026}");
+        assert_eq!(truncate_str("hello world", 5), "hello…");
+    }
+
+    #[test]
+    fn test_truncate_str_utf8() {
+        assert_eq!(truncate_str("A me così è già", 8), "A me cos…");
+        assert_eq!(truncate_str("èèè", 2), "èè…");
+        assert_eq!(truncate_str("🙂🙂🙂", 2), "🙂🙂…");
     }
 
     #[test]
     fn test_encode_wav_empty() {
         let samples: Vec<i16> = vec![];
         let wav = encode_wav(&samples);
-        // Header only, 0 data bytes
         assert_eq!(wav.len(), 44);
         let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
         assert_eq!(data_size, 0);
@@ -373,37 +357,23 @@ mod tests {
     fn test_extract_text_multipart() {
         let response = json!({
             "candidates": [{
-                "content": {
-                    "parts": [
-                        {"text": "ciao "},
-                        {"text": "mondo"}
-                    ]
-                },
+                "content": {"parts": [{"text": "ciao "},{"text": "mondo"}]},
                 "finishReason": "STOP"
             }]
         });
-        let text = extract_text(&response).unwrap();
-        assert_eq!(text, "ciao mondo");
+        assert_eq!(extract_text(&response).unwrap(), "ciao mondo");
     }
 
     #[test]
     fn test_extract_text_no_candidates() {
-        let response = json!({});
-        let text = extract_text(&response).unwrap();
-        assert!(text.is_empty());
+        assert!(extract_text(&json!({})).unwrap().is_empty());
     }
 
     #[test]
     fn test_extract_text_safety_block() {
         let response = json!({
-            "candidates": [{
-                "content": {
-                    "parts": []
-                },
-                "finishReason": "SAFETY"
-            }]
+            "candidates": [{"content": {"parts": []}, "finishReason": "SAFETY"}]
         });
-        let text = extract_text(&response).unwrap();
-        assert!(text.is_empty());
+        assert!(extract_text(&response).unwrap().is_empty());
     }
 }

@@ -23,18 +23,26 @@ pub enum Provider {
 impl Provider {
     pub async fn transcribe(&self, audio: &[i16], language: &str) -> Result<(String, TokenUsage)> {
         match self {
-            Provider::Gemini(p) => p.transcribe(audio, language).await,
+            Provider::Gemini(provider) => provider.transcribe(audio, language).await,
         }
     }
 }
 
-/// Factory function per instanziare il provider corretto dal profilo.
+/// Instantiate the configured provider from a profile snapshot.
 pub fn create_provider(profile: &Profile, keys: &HashMap<String, String>) -> Result<Provider> {
     match profile.provider.as_str() {
         "gemini" => {
             let api_key = keys.get("gemini").cloned().unwrap_or_default();
-            Ok(Provider::Gemini(gemini::GeminiProvider::new(api_key, profile.model.clone())))
+            Ok(Provider::Gemini(gemini::GeminiProvider::new(
+                api_key,
+                profile.model.clone(),
+                profile.timeout_secs,
+                profile.custom_prompt.clone(),
+            )))
         }
-        _ => anyhow::bail!("Provider '{}' non ancora supportato o sconosciuto", profile.provider),
+        _ => anyhow::bail!(
+            "Provider '{}' non ancora supportato o sconosciuto",
+            profile.provider
+        ),
     }
 }
