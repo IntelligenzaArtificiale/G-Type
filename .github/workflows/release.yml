@@ -4,18 +4,26 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
+    types: [closed]
 
 permissions:
   contents: write
 
 jobs:
   release_meta:
-    if: startsWith(github.event.head_commit.message, 'release: v')
+    if: >-
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release: v')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.title, 'release: v'))
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
       - id: version
         name: Resolve version from Cargo.toml
         shell: bash
@@ -53,6 +61,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -108,7 +118,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release_meta.outputs.tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
           files: artifacts/**/*
           generate_release_notes: true
         env:
