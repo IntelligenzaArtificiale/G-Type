@@ -1,6 +1,6 @@
 [package]
 name = "g-type"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2021"
 description = "Global walkie-talkie dictation daemon powered by Gemini REST API"
 license = "MIT"
@@ -64,6 +64,10 @@ tray-icon = "0.19"
 muda = "0.15"
 wry = "0.46"
 winit = "0.30"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# GTK is only used by the Linux tray/event-loop integration. Keeping it target
+# specific prevents macOS/Windows release jobs from requiring GTK system libs.
 gtk = "0.18"
 
 [profile.release]

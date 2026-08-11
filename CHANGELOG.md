@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.4.1 — 2026-08-11
+
+- Keeps the full v1.4 dashboard redesign and Linux `GLXBadWindow` safe-mode fix.
+- Makes GTK a Linux-only dependency so macOS and Windows release builds do not require GTK system libraries.
+- Patch release prepared for the cross-platform binary matrix.
+
 ## v1.4.0 — 2026-08-11
 
 - Dashboard reorganized into Cronologia, Statistiche and Impostazioni.
