@@ -1,14 +1,13 @@
-// config.rs — V2 Configuration System. Zero Fluff, Auto-Migrating Data Layer.
+// config.rs — V2 configuration system with crash-safe persistence and migration.
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
-
-// ── V2 Structures ────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConfigV2 {
@@ -65,8 +64,6 @@ pub struct Profile {
     pub timeout_secs: u64,
     #[serde(default)]
     pub transforms: Vec<TransformConfig>,
-    /// Optional system prompt injected into the transcription request.
-    /// Overrides the default transcription prompt when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_prompt: Option<String>,
 }
@@ -99,17 +96,27 @@ pub enum TransformConfig {
     },
 }
 
-// ── Default Values ───────────────────────────────────────
-
-fn default_model() -> String { "models/gemini-2.0-flash".into() }
-fn default_hotkey() -> String { "ctrl+shift+space".into() }
-fn default_timeout_secs() -> u64 { 10 }
-fn default_language() -> String { "auto".into() }
-fn default_sound_enabled() -> bool { true }
-fn default_tray_enabled() -> bool { true }
-fn default_currency() -> String { "USD".into() }
-
-// ── Legacy V1 Structure (strictly for migration) ─────────
+fn default_model() -> String {
+    "models/gemini-2.0-flash".into()
+}
+fn default_hotkey() -> String {
+    "ctrl+shift+space".into()
+}
+fn default_timeout_secs() -> u64 {
+    10
+}
+fn default_language() -> String {
+    "auto".into()
+}
+fn default_sound_enabled() -> bool {
+    true
+}
+fn default_tray_enabled() -> bool {
+    true
+}
+fn default_currency() -> String {
+    "USD".into()
+}
 
 #[derive(Deserialize)]
 struct ConfigV1 {
@@ -128,8 +135,6 @@ struct ConfigV1 {
     currency: String,
 }
 
-// ── Migration & Loading ──────────────────────────────────
-
 fn config_dir() -> Result<PathBuf> {
     let proj = ProjectDirs::from("", "", "g-type")
         .context("Cannot determine home directory for config")?;
@@ -138,6 +143,29 @@ fn config_dir() -> Result<PathBuf> {
 
 pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    path.with_extension("toml.bak")
+}
+
+fn parse_config(raw: &str) -> Result<ConfigV2> {
+    if let Ok(v2) = toml::from_str::<ConfigV2>(raw) {
+        return Ok(v2);
+    }
+
+    let v1 = toml::from_str::<ConfigV1>(raw).context("config is neither valid V2 nor legacy V1")?;
+    let mut v2 = ConfigV2::default();
+    v2.global.language = v1.language;
+    v2.global.sound_enabled = v1.sound_enabled;
+    v2.global.currency = v1.currency;
+    if !v1.api_key.is_empty() && v1.api_key != "YOUR_GEMINI_API_KEY_HERE" {
+        v2.keys.insert("gemini".to_string(), v1.api_key);
+    }
+    v2.profiles[0].hotkey = v1.hotkey;
+    v2.profiles[0].model = v1.model;
+    v2.profiles[0].timeout_secs = v1.timeout_secs;
+    Ok(v2)
 }
 
 pub fn load() -> Result<ConfigV2> {
@@ -153,42 +181,39 @@ pub fn load() -> Result<ConfigV2> {
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read config at {}", path.display()))?;
 
-    // Try V2 format first
-    if let Ok(v2) = toml::from_str::<ConfigV2>(&raw) {
-        return Ok(v2);
-    }
-
-    // Fallback: Try V1 and auto-migrate
-    info!("Detected legacy V1 config format. Running auto-migration to V2...");
-    match toml::from_str::<ConfigV1>(&raw) {
-        Ok(v1) => {
-            let mut v2 = ConfigV2::default();
-
-            v2.global.language = v1.language;
-            v2.global.sound_enabled = v1.sound_enabled;
-            v2.global.currency = v1.currency;
-
-            if !v1.api_key.is_empty() && v1.api_key != "YOUR_GEMINI_API_KEY_HERE" {
-                v2.keys.insert("gemini".to_string(), v1.api_key);
+    match parse_config(&raw) {
+        Ok(config) => {
+            if toml::from_str::<ConfigV2>(&raw).is_err() {
+                info!("Detected legacy V1 config. Migrating to V2.");
+                save(&config, &path)?;
+            }
+            Ok(config)
+        }
+        Err(primary_error) => {
+            let backup = backup_path(&path);
+            if backup.exists() {
+                warn!(
+                    error = %primary_error,
+                    backup = %backup.display(),
+                    "Primary config is unreadable; trying backup"
+                );
+                if let Ok(backup_raw) = fs::read_to_string(&backup) {
+                    if let Ok(recovered) = parse_config(&backup_raw) {
+                        save(&recovered, &path)?;
+                        warn!("Recovered configuration from backup");
+                        return Ok(recovered);
+                    }
+                }
             }
 
-            v2.profiles[0].hotkey = v1.hotkey;
-            v2.profiles[0].model = v1.model;
-            v2.profiles[0].timeout_secs = v1.timeout_secs;
-
-            // Save immediately. Zero user intervention.
-            save(&v2, &path)?;
-            info!("Successfully migrated to V2 config format.");
-            Ok(v2)
-        }
-        Err(e) => {
-            warn!("Config parsing failed. Cannot read as V2 or V1: {}", e);
-            anyhow::bail!("Unreadable config file syntax at {}. Please check it or delete it.", path.display());
+            anyhow::bail!(
+                "Unreadable config file at {} and no valid backup is available: {}",
+                path.display(),
+                primary_error
+            )
         }
     }
 }
-
-// ── Save ─────────────────────────────────────────────────
 
 pub fn save(cfg: &ConfigV2, path: &PathBuf) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -197,12 +222,72 @@ pub fn save(cfg: &ConfigV2, path: &PathBuf) -> Result<()> {
     }
 
     let content = toml::to_string_pretty(cfg).context("Failed to serialize config")?;
-    fs::write(path, &content)
-        .with_context(|| format!("Failed to write config to {}", path.display()))?;
+    atomic_write_with_backup(path, content.as_bytes())?;
     Ok(())
 }
 
-// ── Helpers ──────────────────────────────────────────────
+fn atomic_write_with_backup(path: &Path, bytes: &[u8]) -> Result<()> {
+    let tmp = path.with_extension("toml.tmp");
+    let backup = backup_path(path);
+
+    {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)
+            .with_context(|| format!("Cannot create temporary config {}", tmp.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("Cannot write temporary config {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("Cannot sync temporary config {}", tmp.display()))?;
+    }
+
+    if path.exists() {
+        fs::copy(path, &backup)
+            .with_context(|| format!("Cannot create config backup {}", backup.display()))?;
+        if let Ok(file) = fs::OpenOptions::new().read(true).open(&backup) {
+            let _ = file.sync_all();
+        }
+    }
+
+    if let Err(error) = replace_file(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        if !path.exists() && backup.exists() {
+            let _ = fs::copy(&backup, path);
+        }
+        return Err(error).with_context(|| format!("Cannot replace config {}", path.display()));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn replace_file(tmp: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(tmp, destination)
+}
+
+#[cfg(windows)]
+fn replace_file(tmp: &Path, destination: &Path) -> std::io::Result<()> {
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+    fs::rename(tmp, destination)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn replace_file(tmp: &Path, destination: &Path) -> std::io::Result<()> {
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+    fs::rename(tmp, destination)
+}
 
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("auto", "Auto-detect"),
@@ -226,8 +311,8 @@ pub fn transcription_prompt(language: &str) -> String {
         code => {
             let name = LANGUAGES
                 .iter()
-                .find(|(c, _)| *c == code)
-                .map(|(_, n)| *n)
+                .find(|(candidate, _)| *candidate == code)
+                .map(|(_, name)| *name)
                 .unwrap_or(code);
             format!(" The audio is in {name} ({code}). Transcribe in that language.")
         }
@@ -247,4 +332,30 @@ pub fn set_api_key(key: &str) -> Result<()> {
     save(&cfg, &path)?;
     println!("  ✔ API key updated.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_write_keeps_backup_and_latest_content() {
+        let root = std::env::temp_dir().join(format!(
+            "g-type-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+
+        atomic_write_with_backup(&path, b"first").unwrap();
+        atomic_write_with_backup(&path, b"second").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+        assert_eq!(fs::read_to_string(backup_path(&path)).unwrap(), "first");
+        let _ = fs::remove_dir_all(root);
+    }
 }
