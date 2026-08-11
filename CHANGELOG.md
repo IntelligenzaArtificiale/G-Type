@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.4.3 — 2026-08-11
+
+- Fixes macOS/Windows compilation of the global input listener by using compile-time platform selection instead of `cfg!()` around the Linux-only evdev path.
+- Adds macOS Intel, macOS Apple Silicon and Windows compile checks to normal CI so cross-platform regressions are caught before release.
+- Includes the complete three-page dashboard redesign, live settings and Linux `GLXBadWindow` safe mode from v1.4.x.
+
 ## v1.4.2 — 2026-08-11
 
 - Definitive release of the redesigned three-page dashboard and Linux safe mode.
