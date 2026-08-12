@@ -21,6 +21,7 @@ use crate::transforms;
 use crate::ui_bridge::{DaemonEvent, DaemonState, ProfileInfo, UiCommand};
 
 const MAX_RECORDING_SECS: u64 = 10 * 60;
+const AUDIO_STARTUP_TIMEOUT_MS: u64 = 1_500;
 
 pub async fn run_with_ui(
     config: Arc<RwLock<ConfigV2>>,
@@ -226,8 +227,28 @@ async fn state_recording(
     };
     drop(audio_tx);
 
+    // A cpal stream can occasionally build successfully but never emit a
+    // callback. Detect that in ~1.5s instead of letting the user dictate for a
+    // minute into an empty buffer. The first valid chunk is kept and becomes
+    // the beginning of the recording, so this health check loses no audio.
+    let first_chunk = match audio_rx.recv_timeout(std::time::Duration::from_millis(
+        AUDIO_STARTUP_TIMEOUT_MS,
+    )) {
+        Ok(chunk) => chunk,
+        Err(error) => {
+            recording_flag.store(false, Ordering::Relaxed);
+            let _ = audio_thread_handle.join();
+            error!(%error, "Microphone stream produced no audio; aborting recording early");
+            if config.global.sound_enabled {
+                crate::audio_feedback::play_error_beep();
+            }
+            return;
+        }
+    };
+
     let collector_handle = tokio::task::spawn_blocking(move || {
         let mut all_samples = Vec::<i16>::with_capacity(480_000);
+        all_samples.extend_from_slice(&first_chunk);
         while let Ok(chunk) = audio_rx.recv() {
             all_samples.extend_from_slice(&chunk);
         }
