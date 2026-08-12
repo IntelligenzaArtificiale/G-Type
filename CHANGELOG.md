@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.4.6 — 2026-08-13
+
+- Refreshes the Gemini audio-to-text model catalog and standard paid pricing from the official Google Gemini Developer API documentation, reviewed 2026-08-13.
+- Adds current selectable one-shot audio→text models through Gemini 3.6 Flash, 3.5 Flash / Flash-Lite, 3.1 Flash-Lite / Pro Preview / 3 Flash Preview, and the supported Gemini 2.5 family; retired endpoints remain non-selectable.
+- Corrects cost accounting by using prompt modality details when Google returns them: audio input and text prompt tokens are priced separately, while thinking tokens are included in output cost.
+- Stops repeatedly retrying the same overloaded Gemini endpoint. On transient 503/5xx, 429, timeout or network failures, normal dictation can move to up to two stable inexpensive Flash-Lite fallbacks. Auth, configuration and bad-request failures never trigger automatic fallback.
+- Records the model that actually produced the transcription, so history and cost tracking remain correct when a fallback model succeeds.
+- Recovery now lets the user explicitly choose a different compatible Gemini model before retrying a preserved WAV; failed retries never remove the audio.
+- Removes deprecated sampling parameters from Gemini 3.6 / 3.5 requests and uses low-cost thinking levels for transcription where supported.
+- Exposes the model catalog through `/api/models`; dashboard/setup selectors use the same catalog instead of stale hard-coded model IDs.
+- Keeps Live API native-audio models separate from one-shot generateContent transcription models so protocol-incompatible endpoints cannot be selected accidentally.
+
 ## v1.4.5 — 2026-08-12
 
 - Preserves every completed recording as a local WAV before the Gemini request starts, so provider timeouts, 503 responses, network failures or interruptions during transcription no longer destroy the spoken audio.
