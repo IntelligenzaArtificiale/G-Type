@@ -9,12 +9,13 @@ use axum::{
     Router,
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::ConfigV2;
+use crate::providers::model_catalog;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -33,6 +34,7 @@ pub async fn start_server_with_listener(
         .route("/setup", get(serve_setup))
         .route("/setup", post(api_setup))
         .route("/api/state", get(api_state))
+        .route("/api/models", get(api_models))
         .route("/api/history", get(api_history))
         .route("/api/statistics", get(api_statistics))
         .route("/api/recovery", get(api_recovery))
@@ -52,6 +54,23 @@ pub async fn start_server_with_listener(
         .map_err(|e| anyhow::anyhow!("Axum server error: {}", e))
 }
 
+fn dashboard_model_options() -> Vec<Value> {
+    model_catalog::selectable_models()
+        .map(|spec| {
+            json!([
+                spec.normalized_id(),
+                format!(
+                    "{} · audio ${:.2}/M · output ${:.2}/M{}",
+                    spec.label,
+                    spec.input_audio_per_m,
+                    spec.output_per_m,
+                    if spec.status == "preview" { " · preview" } else { "" }
+                )
+            ])
+        })
+        .collect()
+}
+
 async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config.read().await;
     if config.keys.is_empty() {
@@ -63,6 +82,14 @@ async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
         .map(|items| items.len())
         .unwrap_or(0);
     let mut html = include_str!("settings_ui.html").to_string();
+
+    // Keep the dashboard HTML lightweight while making the Rust model catalog
+    // the single source of truth for all profile selectors.
+    let old_models = "const MODELS=[['models/gemini-2.0-flash','gemini-2.0-flash'],['models/gemini-2.5-flash','gemini-2.5-flash'],['models/gemini-2.5-flash-lite','gemini-2.5-flash-lite'],['models/gemini-2.5-pro','gemini-2.5-pro']];";
+    if let Ok(models_json) = serde_json::to_string(&dashboard_model_options()) {
+        html = html.replacen(old_models, &format!("const MODELS={models_json};"), 1);
+    }
+
     if recovery_count > 0 {
         let banner = format!(
             "</nav><a href=\"/recovery\" style=\"display:flex;align-items:center;justify-content:space-between;gap:14px;margin:-10px 0 20px;padding:12px 14px;border:1px solid rgba(245,158,11,.28);background:rgba(245,158,11,.08);border-radius:11px;color:#fcd34d;text-decoration:none;font-size:12px\"><span><strong>{recovery_count} audio da recuperare</strong> · le registrazioni sono al sicuro su disco</span><span>Apri recupero →</span></a>"
@@ -84,6 +111,19 @@ async fn serve_setup() -> impl IntoResponse {
     Html(include_str!("setup_ui.html")).into_response()
 }
 
+async fn api_models() -> impl IntoResponse {
+    let models: Vec<_> = model_catalog::selectable_models().copied().collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "pricing_reviewed_at": model_catalog::PRICING_REVIEWED_AT,
+            "recommended": model_catalog::recommended_model(),
+            "models": models,
+            "live_audio_models": model_catalog::LIVE_AUDIO_MODELS,
+        })),
+    )
+}
+
 #[derive(Deserialize)]
 struct SetupPayload {
     api_key: String,
@@ -98,6 +138,9 @@ async fn api_setup(
     if let Err(e) = crate::input::parse_hotkey(payload.hotkey.trim()) {
         return bad_request(format!("Hotkey non valida: {e}"));
     }
+    if !model_catalog::is_selectable(&payload.model) {
+        return bad_request("Modello Gemini non disponibile per la trascrizione".into());
+    }
 
     let api_key = payload.api_key.trim();
     if api_key.is_empty() {
@@ -105,13 +148,15 @@ async fn api_setup(
     }
 
     let mut config = state.config.write().await;
-    config.keys.insert("gemini".to_string(), api_key.to_string());
+    config
+        .keys
+        .insert("gemini".to_string(), api_key.to_string());
     if let Some(profile) = config.profiles.get_mut(0) {
-        profile.model = payload.model;
+        profile.model = normalized_model(&payload.model);
         profile.hotkey = payload.hotkey.trim().to_string();
     } else {
         let p = crate::config::Profile {
-            model: payload.model,
+            model: normalized_model(&payload.model),
             hotkey: payload.hotkey.trim().to_string(),
             ..crate::config::Profile::default()
         };
@@ -131,7 +176,6 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
 
     let mut public_config = config.clone();
     public_config.keys.clear();
-
     let gemini_key = config.keys.get("gemini").map(String::as_str).unwrap_or("");
 
     (
@@ -154,6 +198,8 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
             "runtime": {
                 "live_profile_reload": true,
                 "recovery_spool": true,
+                "model_fallback": true,
+                "pricing_reviewed_at": model_catalog::PRICING_REVIEWED_AT,
                 "version": env!("CARGO_PKG_VERSION")
             }
         })),
@@ -184,9 +230,15 @@ async fn api_recovery() -> impl IntoResponse {
     }
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RetryRecoveryPayload {
+    model: Option<String>,
+}
+
 async fn api_retry_recovery(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Json(payload): Json<RetryRecoveryPayload>,
 ) -> impl IntoResponse {
     let (item, samples) = match crate::app::recovery::load(&id) {
         Ok(value) => value,
@@ -197,28 +249,35 @@ async fn api_retry_recovery(
     };
 
     let config = state.config.read().await.clone();
-    let profile = config
+    let requested_model = payload
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if model_catalog::is_selectable(&item.model) {
+                item.model.clone()
+            } else {
+                model_catalog::recommended_model().to_string()
+            }
+        });
+
+    if !model_catalog::is_selectable(&requested_model) {
+        return bad_request("Il modello scelto non supporta questa trascrizione".into());
+    }
+
+    let mut profile = config
         .profiles
         .iter()
         .find(|profile| profile.name == item.profile)
         .cloned()
         .unwrap_or_else(|| crate::config::Profile {
             name: item.profile.clone(),
-            model: item.model.clone(),
+            model: normalized_model(&requested_model),
             ..crate::config::Profile::default()
         });
-
-    let provider = match crate::providers::create_provider(&profile, &config.keys) {
-        Ok(provider) => provider,
-        Err(error) => {
-            let _ = crate::app::recovery::mark_failure(&id, &error.to_string());
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": error.to_string()})),
-            )
-                .into_response();
-        }
-    };
+    profile.model = normalized_model(&requested_model);
 
     let language = if item.language.trim().is_empty() {
         config.global.language.as_str()
@@ -226,15 +285,29 @@ async fn api_retry_recovery(
         item.language.as_str()
     };
 
-    let (transcription, usage) = match provider.transcribe(&samples, language).await {
-        Ok(result) => result,
+    let outcome = match crate::providers::transcribe_exact(
+        &profile,
+        &config.keys,
+        &requested_model,
+        &samples,
+        language,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
         Err(error) => {
-            let _ = crate::app::recovery::mark_failure(&id, &error.to_string());
-            tracing::warn!(%error, id, "Recovery retry failed; WAV kept on disk");
+            let message = format!(
+                "{}: {}",
+                model_catalog::normalize_model_id(&requested_model),
+                error
+            );
+            let _ = crate::app::recovery::mark_failure(&id, &message);
+            tracing::warn!(%error, model = %requested_model, id, "Recovery retry failed; WAV kept on disk");
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({
                     "error": error.to_string(),
+                    "model": requested_model,
                     "preserved": true
                 })),
             )
@@ -242,9 +315,12 @@ async fn api_retry_recovery(
         }
     };
 
-    if transcription.trim().is_empty() {
-        let message = "Gemini ha restituito una trascrizione vuota";
-        let _ = crate::app::recovery::mark_failure(&id, message);
+    if outcome.text.trim().is_empty() {
+        let message = format!(
+            "{}: Gemini ha restituito una trascrizione vuota",
+            model_catalog::normalize_model_id(&requested_model)
+        );
+        let _ = crate::app::recovery::mark_failure(&id, &message);
         return (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": message, "preserved": true})),
@@ -253,9 +329,9 @@ async fn api_retry_recovery(
     }
 
     let final_text = if profile.transforms.is_empty() {
-        transcription
+        outcome.text
     } else {
-        crate::transforms::run_pipeline(&profile.transforms, &transcription, language).await
+        crate::transforms::run_pipeline(&profile.transforms, &outcome.text, language).await
     };
 
     if final_text.trim().is_empty() {
@@ -269,9 +345,9 @@ async fn api_retry_recovery(
     }
 
     let record = crate::tracking::build_record(
-        &profile.model,
+        &outcome.model_used,
         item.duration_secs,
-        &usage,
+        &outcome.usage,
         &final_text,
     );
     if let Err(error) = crate::tracking::append_record(&record) {
@@ -293,7 +369,8 @@ async fn api_retry_recovery(
         Json(json!({
             "ok": true,
             "text": final_text,
-            "duration_secs": item.duration_secs
+            "duration_secs": item.duration_secs,
+            "model_used": outcome.model_used
         })),
     )
         .into_response()
@@ -338,11 +415,7 @@ async fn api_statistics() -> impl IntoResponse {
         m.3 += r.audio_duration_secs;
     }
 
-    let mut days = by_day
-        .into_iter()
-        .rev()
-        .take(14)
-        .collect::<Vec<_>>();
+    let mut days = by_day.into_iter().rev().take(14).collect::<Vec<_>>();
     days.reverse();
 
     let daily = days
@@ -422,14 +495,8 @@ async fn api_statistics() -> impl IntoResponse {
 
 async fn api_open_config() -> impl IntoResponse {
     match crate::config::config_path() {
-        Ok(path) => {
-            if open::that(&path).is_ok() {
-                StatusCode::OK
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-        }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(path) if open::that(&path).is_ok() => StatusCode::OK,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -448,7 +515,9 @@ async fn api_update_gemini_key(
     }
 
     let mut config = state.config.write().await;
-    config.keys.insert("gemini".to_string(), api_key.to_string());
+    config
+        .keys
+        .insert("gemini".to_string(), api_key.to_string());
     match save_config(&config) {
         StatusCode::OK => (
             StatusCode::OK,
@@ -484,6 +553,9 @@ async fn api_create_profile(
     if let Err(e) = crate::input::parse_hotkey(&hotkey) {
         return bad_request(format!("Hotkey non valida: {e}"));
     }
+    if !model_catalog::is_selectable(&payload.model) {
+        return bad_request("Modello Gemini non disponibile per la trascrizione".into());
+    }
 
     let mut config = state.config.write().await;
     if config.profiles.iter().any(|p| p.name == name) {
@@ -497,7 +569,7 @@ async fn api_create_profile(
         name: name.clone(),
         hotkey,
         provider: payload.provider.unwrap_or_else(|| "gemini".to_string()),
-        model: payload.model,
+        model: normalized_model(&payload.model),
         timeout_secs: 10,
         transforms: vec![],
         custom_prompt: clean_prompt(payload.custom_prompt),
@@ -519,11 +591,9 @@ async fn api_delete_profile(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let mut config = state.config.write().await;
-
     if config.profiles.len() <= 1 {
         return bad_request("Non puoi eliminare l'ultimo profilo".into());
     }
-
     let before = config.profiles.len();
     config.profiles.retain(|p| p.name != name);
     if config.profiles.len() == before {
@@ -577,7 +647,6 @@ async fn api_update_profile(
     if let Err(e) = crate::input::parse_hotkey(&new_hotkey) {
         return bad_request(format!("Hotkey non valida: {e}"));
     }
-
     if config
         .profiles
         .iter()
@@ -595,11 +664,17 @@ async fn api_update_profile(
         return conflict("Questa hotkey è già usata da un altro profilo".into());
     }
 
+    if let Some(ref model) = payload.model {
+        if !model_catalog::is_selectable(model) {
+            return bad_request("Modello Gemini non disponibile per la trascrizione".into());
+        }
+    }
+
     let p = &mut config.profiles[index];
     p.name = new_name.clone();
     p.hotkey = new_hotkey;
     if let Some(model) = payload.model.filter(|s| !s.trim().is_empty()) {
-        p.model = model;
+        p.model = normalized_model(&model);
     }
     if let Some(provider) = payload.provider.filter(|s| !s.trim().is_empty()) {
         p.provider = provider;
@@ -614,6 +689,10 @@ async fn api_update_profile(
             .into_response(),
         code => code.into_response(),
     }
+}
+
+fn normalized_model(model: &str) -> String {
+    format!("models/{}", model_catalog::normalize_model_id(model))
 }
 
 fn mask_secret(value: &str) -> String {
