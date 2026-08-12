@@ -281,6 +281,7 @@ fn main() -> Result<()> {
 
     let p0 = cfg.profiles.first().expect("At least 1 profile must exist");
     debug!(model = %p0.model, hotkey = %p0.hotkey, "Configuration loaded");
+    let tray_enabled = cfg.global.tray_enabled;
 
     #[cfg(target_os = "linux")]
     if let Err(e) = gtk::init() {
@@ -341,7 +342,7 @@ fn main() -> Result<()> {
 
             match event {
                 Event::NewEvents(StartCause::Init) | Event::Resumed => {
-                    if tray_mgr.is_none() {
+                    if tray_enabled && tray_mgr.is_none() {
                         match tray::TrayManager::new(ui_tx_gui.clone()) {
                             Ok(tm) => {
                                 info!("Tray icon initialized");
