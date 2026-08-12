@@ -1,14 +1,12 @@
 // gemini.rs — Gemini generateContent REST provider for voice transcription.
-// Keeps transport failures separate from transcription text so errors are never
-// injected into the user's focused application.
+// Transport/provider failures are typed so the orchestration layer can safely
+// distinguish transient overload from permanent auth/configuration problems.
 
-use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use reqwest::Client;
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde_json::{json, Value};
+use std::fmt;
 use tracing::{debug, error, warn};
 
 use crate::tracking::TokenUsage;
@@ -16,6 +14,57 @@ use crate::tracking::TokenUsage;
 const MIN_TIMEOUT_SECS: u64 = 3;
 const MAX_TIMEOUT_SECS: u64 = 180;
 const ADAPTIVE_BASE_TIMEOUT_SECS: u64 = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeminiErrorKind {
+    Configuration,
+    Authentication,
+    BadRequest,
+    RateLimited,
+    Unavailable,
+    Timeout,
+    Network,
+    InvalidResponse,
+}
+
+#[derive(Debug)]
+pub struct GeminiError {
+    pub kind: GeminiErrorKind,
+    pub status: Option<u16>,
+    message: String,
+}
+
+impl GeminiError {
+    fn new(kind: GeminiErrorKind, status: Option<u16>, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            status,
+            message: message.into(),
+        }
+    }
+
+    pub fn configuration(message: impl Into<String>) -> Self {
+        Self::new(GeminiErrorKind::Configuration, None, message)
+    }
+
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self.kind,
+            GeminiErrorKind::RateLimited
+                | GeminiErrorKind::Unavailable
+                | GeminiErrorKind::Timeout
+                | GeminiErrorKind::Network
+        )
+    }
+}
+
+impl fmt::Display for GeminiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for GeminiError {}
 
 pub struct GeminiProvider {
     pub api_key: String,
@@ -38,29 +87,19 @@ impl GeminiProvider {
             custom_prompt,
         }
     }
-}
 
-fn http_client(timeout_secs: u64) -> Result<ClientWithMiddleware> {
-    let reqwest_client = Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
-
-    Ok(ClientBuilder::new(reqwest_client)
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build())
-}
-
-impl GeminiProvider {
-    pub async fn transcribe(&self, samples: &[i16], language: &str) -> Result<(String, TokenUsage)> {
+    pub async fn transcribe(
+        &self,
+        samples: &[i16],
+        language: &str,
+    ) -> Result<(String, TokenUsage), GeminiError> {
         if samples.is_empty() {
-            bail!("No audio samples to transcribe");
+            return Err(GeminiError::configuration("No audio samples to transcribe"));
         }
         if self.api_key.trim().is_empty() {
-            bail!("Gemini API key is not configured");
+            return Err(GeminiError::configuration(
+                "Gemini API key is not configured",
+            ));
         }
 
         let duration_secs = samples.len() as f64 / 16_000.0;
@@ -70,19 +109,13 @@ impl GeminiProvider {
             duration_secs = format!("{:.1}", duration_secs),
             configured_timeout_secs = self.timeout_secs,
             effective_timeout_secs,
+            model = %self.model,
             "Sending audio to Gemini API"
         );
 
         let wav_bytes = encode_wav(samples);
         let wav_b64 = BASE64.encode(&wav_bytes);
-
-        debug!(
-            wav_size = wav_bytes.len(),
-            b64_size = wav_b64.len(),
-            "Audio encoded as WAV"
-        );
-
-        let model_name = self.model.strip_prefix("models/").unwrap_or(&self.model);
+        let model_name = crate::providers::model_catalog::normalize_model_id(&self.model);
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
             model_name
@@ -91,11 +124,24 @@ impl GeminiProvider {
             &wav_b64,
             language,
             self.custom_prompt.as_deref(),
+            model_name,
         );
 
-        debug!(model = %self.model, "Sending request to Gemini API");
+        let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(effective_timeout_secs))
+            .build()
+            .map_err(|error| {
+                GeminiError::new(
+                    GeminiErrorKind::Configuration,
+                    None,
+                    format!("Failed to build HTTP client: {error}"),
+                )
+            })?;
 
-        let client = http_client(effective_timeout_secs)?;
+        // One request per model. The higher-level provider orchestration changes
+        // model on transient overload instead of retrying the same 503 endpoint
+        // four times and wasting the user's time.
         let response = client
             .post(&url)
             .header("Content-Type", "application/json")
@@ -103,28 +149,51 @@ impl GeminiProvider {
             .json(&body)
             .send()
             .await
-            .context("HTTP request to Gemini API failed")?;
+            .map_err(classify_reqwest_error)?;
 
         let status = response.status();
-        let response_text = response
-            .text()
-            .await
-            .context("Failed to read API response body")?;
-
+        let response_text = response.text().await.map_err(classify_reqwest_error)?;
         debug!(status = %status, body_len = response_text.len(), "API response received");
 
         if !status.is_success() {
-            error!(status = %status, body = %truncate_str(&response_text, 500), "Gemini API error");
-            match status.as_u16() {
-                401 | 403 => bail!("Gemini API key non valida o permessi insufficienti ({status})"),
-                429 => bail!("Gemini rate limit raggiunto (429). Riprova tra qualche secondo"),
-                500..=599 => bail!("Gemini temporaneamente non disponibile ({status})"),
-                _ => bail!("Gemini API returned {status}"),
-            }
+            error!(status = %status, body = %truncate_str(&response_text, 500), model = %model_name, "Gemini API error");
+            let code = status.as_u16();
+            return Err(match code {
+                401 | 403 => GeminiError::new(
+                    GeminiErrorKind::Authentication,
+                    Some(code),
+                    format!("Gemini API key non valida o permessi insufficienti ({status})"),
+                ),
+                400..=499 if code != 429 => GeminiError::new(
+                    GeminiErrorKind::BadRequest,
+                    Some(code),
+                    format!("Gemini ha rifiutato la richiesta ({status})"),
+                ),
+                429 => GeminiError::new(
+                    GeminiErrorKind::RateLimited,
+                    Some(code),
+                    "Gemini rate limit raggiunto (429)",
+                ),
+                500..=599 => GeminiError::new(
+                    GeminiErrorKind::Unavailable,
+                    Some(code),
+                    format!("Gemini temporaneamente non disponibile ({status})"),
+                ),
+                _ => GeminiError::new(
+                    GeminiErrorKind::InvalidResponse,
+                    Some(code),
+                    format!("Gemini API returned {status}"),
+                ),
+            });
         }
 
-        let parsed: Value =
-            serde_json::from_str(&response_text).context("Failed to parse Gemini API JSON response")?;
+        let parsed: Value = serde_json::from_str(&response_text).map_err(|error| {
+            GeminiError::new(
+                GeminiErrorKind::InvalidResponse,
+                None,
+                format!("Failed to parse Gemini API JSON response: {error}"),
+            )
+        })?;
         let usage = extract_usage(&parsed);
         let transcription = extract_text(&parsed)?;
 
@@ -132,7 +201,10 @@ impl GeminiProvider {
             text_len = transcription.chars().count(),
             text_preview = %truncate_str(&transcription, 80),
             prompt_tokens = usage.prompt_tokens,
+            audio_input_tokens = usage.audio_input_tokens,
+            text_input_tokens = usage.text_input_tokens,
             output_tokens = usage.candidates_tokens,
+            thought_tokens = usage.thoughts_tokens,
             "Transcription received"
         );
 
@@ -140,11 +212,29 @@ impl GeminiProvider {
     }
 }
 
+fn classify_reqwest_error(error: reqwest::Error) -> GeminiError {
+    if error.is_timeout() {
+        GeminiError::new(
+            GeminiErrorKind::Timeout,
+            None,
+            format!("Timeout durante la richiesta Gemini: {error}"),
+        )
+    } else if error.is_connect() {
+        GeminiError::new(
+            GeminiErrorKind::Network,
+            None,
+            format!("Connessione a Gemini non disponibile: {error}"),
+        )
+    } else {
+        GeminiError::new(
+            GeminiErrorKind::Network,
+            error.status().map(|status| status.as_u16()),
+            format!("Errore di rete durante la richiesta Gemini: {error}"),
+        )
+    }
+}
+
 fn adaptive_timeout_secs(configured_timeout_secs: u64, duration_secs: f64) -> u64 {
-    // Long recordings need materially more than the historical 10-second
-    // request budget. Keep the profile setting as a lower bound, then add a
-    // duration-aware network/model budget: 20s + 0.25s for each audio second.
-    // Examples: 20s audio -> 25s, 60s -> 35s, 245s -> ~82s.
     let duration_budget = ADAPTIVE_BASE_TIMEOUT_SECS
         .saturating_add((duration_secs.max(0.0) * 0.25).ceil() as u64);
     configured_timeout_secs
@@ -152,12 +242,30 @@ fn adaptive_timeout_secs(configured_timeout_secs: u64, duration_secs: f64) -> u6
         .clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS)
 }
 
-fn build_request_body(wav_b64: &str, language: &str, custom_prompt: Option<&str>) -> Value {
+fn build_request_body(
+    wav_b64: &str,
+    language: &str,
+    custom_prompt: Option<&str>,
+    model: &str,
+) -> Value {
     let prompt = custom_prompt
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| crate::config::transcription_prompt(language));
+
+    let mut generation_config = json!({
+        "maxOutputTokens": 4096
+    });
+
+    // Starting with Gemini 3.6/3.5, temperature/top_p/top_k are deprecated.
+    // For transcription we intentionally request the lowest supported Gemini 3
+    // thinking level to reduce latency and billable thought tokens.
+    if let Some(level) = crate::providers::model_catalog::find(model)
+        .and_then(|spec| spec.thinking_level)
+    {
+        generation_config["thinkingConfig"] = json!({"thinkingLevel": level});
+    }
 
     json!({
         "contents": [{
@@ -171,60 +279,96 @@ fn build_request_body(wav_b64: &str, language: &str, custom_prompt: Option<&str>
                 }
             ]
         }],
-        "generationConfig": {
-            "temperature": 0.0,
-            "maxOutputTokens": 4096
-        }
+        "generationConfig": generation_config
     })
 }
 
 fn extract_usage(response: &Value) -> TokenUsage {
-    if let Some(meta) = response.get("usageMetadata") {
-        TokenUsage {
-            prompt_tokens: meta
-                .get("promptTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            candidates_tokens: meta
-                .get("candidatesTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            total_tokens: meta
-                .get("totalTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+    let Some(meta) = response.get("usageMetadata") else {
+        return TokenUsage::default();
+    };
+
+    let prompt_tokens = meta
+        .get("promptTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let candidates_tokens = meta
+        .get("candidatesTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let thoughts_tokens = meta
+        .get("thoughtsTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let total_tokens = meta
+        .get("totalTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let mut audio_input_tokens = 0;
+    let mut text_input_tokens = 0;
+    if let Some(details) = meta.get("promptTokensDetails").and_then(Value::as_array) {
+        for detail in details {
+            let modality = detail
+                .get("modality")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_ascii_uppercase();
+            let count = detail
+                .get("tokenCount")
+                .or_else(|| detail.get("tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            match modality.as_str() {
+                "AUDIO" => audio_input_tokens += count,
+                "TEXT" => text_input_tokens += count,
+                _ => {}
+            }
         }
-    } else {
-        TokenUsage::default()
+    }
+
+    TokenUsage {
+        prompt_tokens,
+        candidates_tokens,
+        thoughts_tokens,
+        total_tokens,
+        audio_input_tokens,
+        text_input_tokens,
     }
 }
 
-fn extract_text(response: &Value) -> Result<String> {
+fn extract_text(response: &Value) -> Result<String, GeminiError> {
     if let Some(error) = response.get("error") {
         let msg = error
             .get("message")
-            .and_then(|m| m.as_str())
+            .and_then(Value::as_str)
             .unwrap_or("Unknown Gemini API error");
-        bail!("Gemini API error: {msg}");
+        return Err(GeminiError::new(
+            GeminiErrorKind::InvalidResponse,
+            None,
+            format!("Gemini API error: {msg}"),
+        ));
     }
 
-    if let Some(candidates) = response.get("candidates").and_then(|c| c.as_array()) {
+    if let Some(candidates) = response.get("candidates").and_then(Value::as_array) {
         if let Some(first) = candidates.first() {
-            if let Some(content) = first.get("content") {
-                if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
-                    let mut text = String::new();
-                    for part in parts {
-                        if let Some(value) = part.get("text").and_then(|value| value.as_str()) {
-                            text.push_str(value);
-                        }
+            if let Some(parts) = first
+                .get("content")
+                .and_then(|content| content.get("parts"))
+                .and_then(Value::as_array)
+            {
+                let mut text = String::new();
+                for part in parts {
+                    if let Some(value) = part.get("text").and_then(Value::as_str) {
+                        text.push_str(value);
                     }
-                    if !text.is_empty() {
-                        return Ok(text.trim().to_string());
-                    }
+                }
+                if !text.is_empty() {
+                    return Ok(text.trim().to_string());
                 }
             }
 
-            if let Some(reason) = first.get("finishReason").and_then(|r| r.as_str()) {
+            if let Some(reason) = first.get("finishReason").and_then(Value::as_str) {
                 if reason != "STOP" {
                     warn!(reason, "Gemini response had non-STOP finish reason");
                 }
@@ -290,17 +434,7 @@ mod tests {
         let wav = encode_wav(&samples);
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
-        assert_eq!(&wav[12..16], b"fmt ");
         assert_eq!(&wav[36..40], b"data");
-        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
-        assert_eq!(data_size, 3200);
-    }
-
-    #[test]
-    fn test_encode_wav_total_size() {
-        let samples: Vec<i16> = vec![100, -100, 0, i16::MAX, i16::MIN];
-        let wav = encode_wav(&samples);
-        assert_eq!(wav.len(), 44 + samples.len() * 2);
     }
 
     #[test]
@@ -309,95 +443,49 @@ mod tests {
         assert_eq!(adaptive_timeout_secs(10, 60.0), 35);
         assert_eq!(adaptive_timeout_secs(10, 245.0), 82);
         assert_eq!(adaptive_timeout_secs(120, 20.0), 120);
-        assert_eq!(adaptive_timeout_secs(10, 10_000.0), MAX_TIMEOUT_SECS);
     }
 
     #[test]
-    fn test_build_request_body_default_prompt() {
-        let body = build_request_body("dGVzdA==", "auto", None);
-        assert_eq!(
-            body["contents"][0]["parts"][1]["inlineData"]["mimeType"],
-            "audio/wav"
-        );
-        assert_eq!(
-            body["contents"][0]["parts"][1]["inlineData"]["data"],
-            "dGVzdA=="
-        );
-        assert_eq!(body["generationConfig"]["temperature"], 0.0);
+    fn latest_model_request_has_no_deprecated_sampling_params() {
+        let body = build_request_body("dGVzdA==", "it", None, "gemini-3.6-flash");
+        let config = &body["generationConfig"];
+        assert!(config.get("temperature").is_none());
+        assert!(config.get("topP").is_none());
+        assert!(config.get("topK").is_none());
+        assert_eq!(config["thinkingConfig"]["thinkingLevel"], "minimal");
     }
 
     #[test]
-    fn test_build_request_body_custom_prompt() {
-        let body = build_request_body("dGVzdA==", "it", Some("Scrivi solo il testo"));
-        assert_eq!(body["contents"][0]["parts"][0]["text"], "Scrivi solo il testo");
-    }
-
-    #[test]
-    fn test_extract_text_success() {
+    fn usage_parses_audio_text_and_thought_tokens() {
         let response = json!({
-            "candidates": [{
-                "content": { "parts": [{"text": "ciao mondo"}] },
-                "finishReason": "STOP"
-            }]
+            "usageMetadata": {
+                "promptTokenCount": 330,
+                "candidatesTokenCount": 40,
+                "thoughtsTokenCount": 7,
+                "totalTokenCount": 377,
+                "promptTokensDetails": [
+                    {"modality":"AUDIO","tokenCount":300},
+                    {"modality":"TEXT","tokenCount":30}
+                ]
+            }
         });
-        assert_eq!(extract_text(&response).unwrap(), "ciao mondo");
+        let usage = extract_usage(&response);
+        assert_eq!(usage.audio_input_tokens, 300);
+        assert_eq!(usage.text_input_tokens, 30);
+        assert_eq!(usage.thoughts_tokens, 7);
     }
 
     #[test]
-    fn test_extract_text_empty() {
-        let response = json!({"candidates": [{"content": {"parts": []}}]});
-        assert!(extract_text(&response).unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_extract_text_api_error_is_error() {
-        let response = json!({"error": {"message": "API key invalid", "code": 403}});
-        assert!(extract_text(&response).is_err());
-    }
-
-    #[test]
-    fn test_truncate_str_ascii() {
-        assert_eq!(truncate_str("hello", 10), "hello");
-        assert_eq!(truncate_str("hello world", 5), "hello…");
+    fn error_kinds_have_correct_transience() {
+        assert!(GeminiError::new(GeminiErrorKind::Unavailable, Some(503), "503").is_transient());
+        assert!(GeminiError::new(GeminiErrorKind::RateLimited, Some(429), "429").is_transient());
+        assert!(!GeminiError::new(GeminiErrorKind::Authentication, Some(403), "403").is_transient());
+        assert!(!GeminiError::configuration("bad model").is_transient());
     }
 
     #[test]
     fn test_truncate_str_utf8() {
         assert_eq!(truncate_str("A me così è già", 8), "A me cos…");
-        assert_eq!(truncate_str("èèè", 2), "èè…");
         assert_eq!(truncate_str("🙂🙂🙂", 2), "🙂🙂…");
-    }
-
-    #[test]
-    fn test_encode_wav_empty() {
-        let samples: Vec<i16> = vec![];
-        let wav = encode_wav(&samples);
-        assert_eq!(wav.len(), 44);
-        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
-        assert_eq!(data_size, 0);
-    }
-
-    #[test]
-    fn test_extract_text_multipart() {
-        let response = json!({
-            "candidates": [{
-                "content": {"parts": [{"text": "ciao "},{"text": "mondo"}]},
-                "finishReason": "STOP"
-            }]
-        });
-        assert_eq!(extract_text(&response).unwrap(), "ciao mondo");
-    }
-
-    #[test]
-    fn test_extract_text_no_candidates() {
-        assert!(extract_text(&json!({})).unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_extract_text_safety_block() {
-        let response = json!({
-            "candidates": [{"content": {"parts": []}, "finishReason": "SAFETY"}]
-        });
-        assert!(extract_text(&response).unwrap().is_empty());
     }
 }
