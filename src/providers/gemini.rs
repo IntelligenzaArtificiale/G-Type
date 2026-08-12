@@ -30,21 +30,19 @@ pub enum GeminiErrorKind {
 #[derive(Debug)]
 pub struct GeminiError {
     pub kind: GeminiErrorKind,
-    pub status: Option<u16>,
     message: String,
 }
 
 impl GeminiError {
-    fn new(kind: GeminiErrorKind, status: Option<u16>, message: impl Into<String>) -> Self {
+    fn new(kind: GeminiErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            status,
             message: message.into(),
         }
     }
 
     pub fn configuration(message: impl Into<String>) -> Self {
-        Self::new(GeminiErrorKind::Configuration, None, message)
+        Self::new(GeminiErrorKind::Configuration, message)
     }
 
     pub fn is_transient(&self) -> bool {
@@ -134,7 +132,6 @@ impl GeminiProvider {
             .map_err(|error| {
                 GeminiError::new(
                     GeminiErrorKind::Configuration,
-                    None,
                     format!("Failed to build HTTP client: {error}"),
                 )
             })?;
@@ -161,27 +158,22 @@ impl GeminiProvider {
             return Err(match code {
                 401 | 403 => GeminiError::new(
                     GeminiErrorKind::Authentication,
-                    Some(code),
                     format!("Gemini API key non valida o permessi insufficienti ({status})"),
                 ),
                 400..=499 if code != 429 => GeminiError::new(
                     GeminiErrorKind::BadRequest,
-                    Some(code),
                     format!("Gemini ha rifiutato la richiesta ({status})"),
                 ),
                 429 => GeminiError::new(
                     GeminiErrorKind::RateLimited,
-                    Some(code),
                     "Gemini rate limit raggiunto (429)",
                 ),
                 500..=599 => GeminiError::new(
                     GeminiErrorKind::Unavailable,
-                    Some(code),
                     format!("Gemini temporaneamente non disponibile ({status})"),
                 ),
                 _ => GeminiError::new(
                     GeminiErrorKind::InvalidResponse,
-                    Some(code),
                     format!("Gemini API returned {status}"),
                 ),
             });
@@ -190,7 +182,6 @@ impl GeminiProvider {
         let parsed: Value = serde_json::from_str(&response_text).map_err(|error| {
             GeminiError::new(
                 GeminiErrorKind::InvalidResponse,
-                None,
                 format!("Failed to parse Gemini API JSON response: {error}"),
             )
         })?;
@@ -216,19 +207,16 @@ fn classify_reqwest_error(error: reqwest::Error) -> GeminiError {
     if error.is_timeout() {
         GeminiError::new(
             GeminiErrorKind::Timeout,
-            None,
             format!("Timeout durante la richiesta Gemini: {error}"),
         )
     } else if error.is_connect() {
         GeminiError::new(
             GeminiErrorKind::Network,
-            None,
             format!("Connessione a Gemini non disponibile: {error}"),
         )
     } else {
         GeminiError::new(
             GeminiErrorKind::Network,
-            error.status().map(|status| status.as_u16()),
             format!("Errore di rete durante la richiesta Gemini: {error}"),
         )
     }
@@ -300,10 +288,6 @@ fn extract_usage(response: &Value) -> TokenUsage {
         .get("thoughtsTokenCount")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let total_tokens = meta
-        .get("totalTokenCount")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
 
     let mut audio_input_tokens = 0;
     let mut text_input_tokens = 0;
@@ -331,7 +315,6 @@ fn extract_usage(response: &Value) -> TokenUsage {
         prompt_tokens,
         candidates_tokens,
         thoughts_tokens,
-        total_tokens,
         audio_input_tokens,
         text_input_tokens,
     }
@@ -345,7 +328,6 @@ fn extract_text(response: &Value) -> Result<String, GeminiError> {
             .unwrap_or("Unknown Gemini API error");
         return Err(GeminiError::new(
             GeminiErrorKind::InvalidResponse,
-            None,
             format!("Gemini API error: {msg}"),
         ));
     }
@@ -477,9 +459,9 @@ mod tests {
 
     #[test]
     fn error_kinds_have_correct_transience() {
-        assert!(GeminiError::new(GeminiErrorKind::Unavailable, Some(503), "503").is_transient());
-        assert!(GeminiError::new(GeminiErrorKind::RateLimited, Some(429), "429").is_transient());
-        assert!(!GeminiError::new(GeminiErrorKind::Authentication, Some(403), "403").is_transient());
+        assert!(GeminiError::new(GeminiErrorKind::Unavailable, "503").is_transient());
+        assert!(GeminiError::new(GeminiErrorKind::RateLimited, "429").is_transient());
+        assert!(!GeminiError::new(GeminiErrorKind::Authentication, "403").is_transient());
         assert!(!GeminiError::configuration("bad model").is_transient());
     }
 
