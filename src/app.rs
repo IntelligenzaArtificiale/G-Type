@@ -1,6 +1,5 @@
 // app.rs — Finite State Machine orchestrating the G-Type daemon.
 // States: Idle → Recording → Processing → Injecting → Idle
-// All inter-thread communication via channels; failures return safely to Idle.
 
 #[path = "recovery.rs"]
 pub(crate) mod recovery;
@@ -29,13 +28,11 @@ pub async fn run_with_ui(
     ui_rx: std::sync::mpsc::Receiver<UiCommand>,
 ) -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
-
     let initial_cfg = config.read().await.clone();
     let initial_hotkeys = parsed_hotkeys(&initial_cfg);
     let mut hotkey_signature = profile_hotkey_signature(&initial_cfg);
     let shared_hotkeys = input::SharedHotkeys::new(initial_hotkeys);
     let _ = crate::config::take_runtime_dirty();
-
     let (input_tx, mut input_rx): (InputTx, InputRx) = mpsc::channel(32);
 
     let shutdown_clone = shutdown.clone();
@@ -106,9 +103,7 @@ pub async fn run_with_ui(
                         error!(%error, "Failed to open settings");
                     }
                 }
-                UiCommand::SwitchProfile(name) => {
-                    info!("Profile selected over UI: {}", name);
-                }
+                UiCommand::SwitchProfile(name) => info!("Profile selected over UI: {}", name),
             }
         }
 
@@ -126,7 +121,6 @@ pub async fn run_with_ui(
                     if snapshot.global.sound_enabled {
                         crate::audio_feedback::play_start_beep();
                     }
-
                     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(
                         DaemonState::Recording {
                             profile: profile.name.clone(),
@@ -137,7 +131,6 @@ pub async fn run_with_ui(
                         model_name: profile.model.clone(),
                         active: true,
                     }));
-
                     state_recording(&snapshot, &profile, &mut input_rx, &ui_proxy).await;
                     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
                 } else {
@@ -185,7 +178,6 @@ async fn state_recording(
     ui_proxy: &EventLoopProxy<DaemonEvent>,
 ) {
     debug!("Capturing audio to buffer");
-
     let (audio_tx, audio_rx) = audio::audio_channel();
     let recording_flag = Arc::new(AtomicBool::new(true));
     let configured_device = config.global.audio_device.clone();
@@ -201,36 +193,25 @@ async fn state_recording(
                 .as_deref()
                 .is_some_and(|name| !name.is_empty() && name != "default") =>
         {
-            warn!(
-                device = configured_device.as_deref().unwrap_or_default(),
-                %first_error,
-                "Configured microphone unavailable; falling back to system default"
-            );
+            warn!(device = configured_device.as_deref().unwrap_or_default(), %first_error,
+                "Configured microphone unavailable; falling back to system default");
             match audio::start_capture(audio_tx.clone(), recording_flag.clone(), None) {
                 Ok(handle) => handle,
                 Err(fallback_error) => {
                     error!(%fallback_error, "Failed to start fallback audio capture");
-                    if config.global.sound_enabled {
-                        crate::audio_feedback::play_error_beep();
-                    }
+                    if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
                     return;
                 }
             }
         }
         Err(error) => {
             error!(%error, "Failed to start audio capture");
-            if config.global.sound_enabled {
-                crate::audio_feedback::play_error_beep();
-            }
+            if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
             return;
         }
     };
     drop(audio_tx);
 
-    // A cpal stream can occasionally build successfully but never emit a
-    // callback. Detect that in ~1.5s instead of letting the user dictate for a
-    // minute into an empty buffer. The first valid chunk is kept and becomes
-    // the beginning of the recording, so this health check loses no audio.
     let first_chunk = match audio_rx.recv_timeout(std::time::Duration::from_millis(
         AUDIO_STARTUP_TIMEOUT_MS,
     )) {
@@ -239,9 +220,7 @@ async fn state_recording(
             recording_flag.store(false, Ordering::Relaxed);
             let _ = audio_thread_handle.join();
             error!(%error, "Microphone stream produced no audio; aborting recording early");
-            if config.global.sound_enabled {
-                crate::audio_feedback::play_error_beep();
-            }
+            if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
             return;
         }
     };
@@ -258,125 +237,78 @@ async fn state_recording(
     let watchdog = tokio::time::sleep(std::time::Duration::from_secs(MAX_RECORDING_SECS));
     tokio::pin!(watchdog);
     let mut can_transcribe = true;
-
     loop {
         tokio::select! {
-            signal = input_rx.recv() => {
-                match signal {
-                    Some(InputSignal::Stop) => break,
-                    Some(InputSignal::Start(_)) => continue,
-                    None => {
-                        error!("Input channel closed during recording");
-                        can_transcribe = false;
-                        break;
-                    }
-                }
-            }
-            _ = &mut watchdog => {
-                warn!(max_seconds = MAX_RECORDING_SECS, "Recording watchdog reached; stopping capture safely");
-                break;
-            }
+            signal = input_rx.recv() => match signal {
+                Some(InputSignal::Stop) => break,
+                Some(InputSignal::Start(_)) => continue,
+                None => { error!("Input channel closed during recording"); can_transcribe = false; break; }
+            },
+            _ = &mut watchdog => { warn!(max_seconds = MAX_RECORDING_SECS, "Recording watchdog reached; stopping capture safely"); break; }
         }
     }
 
     recording_flag.store(false, Ordering::Relaxed);
-
     if let Err(error) = audio_thread_handle.join() {
         error!("Audio capture thread panicked: {:?}", error);
         can_transcribe = false;
     }
-
     let all_samples = match collector_handle.await {
         Ok(samples) => samples,
-        Err(error) => {
-            error!(%error, "Audio collector task failed");
-            return;
-        }
+        Err(error) => { error!(%error, "Audio collector task failed"); return; }
     };
-
-    if !can_transcribe {
-        return;
-    }
+    if !can_transcribe { return; }
 
     let duration = all_samples.len() as f64 / 16_000.0;
     info!(duration = format!("{:.1}s", duration), "⏹ Stopped. Transcribing...");
-    if config.global.sound_enabled {
-        crate::audio_feedback::play_stop_beep();
-    }
-
+    if config.global.sound_enabled { crate::audio_feedback::play_stop_beep(); }
     if all_samples.is_empty() {
         warn!("No audio captured, skipping transcription");
-        if config.global.sound_enabled {
-            crate::audio_feedback::play_error_beep();
-        }
+        if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
         return;
     }
 
-    // Persist the complete stopped recording before touching the network. If
-    // Gemini times out, returns 503, the process is interrupted during the API
-    // call, or the user retries later, the spoken audio remains recoverable.
     let recovery_id = match recovery::persist(
         &all_samples,
         &profile.name,
         &profile.model,
         &config.global.language,
     ) {
-        Ok(item) => {
-            debug!(id = %item.id, "Recovery copy persisted");
-            Some(item.id)
-        }
-        Err(error) => {
-            error!(%error, "Could not persist recovery audio; continuing transcription");
-            None
-        }
+        Ok(item) => { debug!(id = %item.id, "Recovery copy persisted"); Some(item.id) }
+        Err(error) => { error!(%error, "Could not persist recovery audio; continuing transcription"); None }
     };
 
     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Processing {
         profile: profile.name.clone(),
     }));
 
-    let provider = match providers::create_provider(profile, &config.keys) {
-        Ok(provider) => provider,
-        Err(error) => {
-            preserve_failure(recovery_id.as_deref(), &error.to_string());
-            error!(%error, "Failed to create provider");
-            if config.global.sound_enabled {
-                crate::audio_feedback::play_error_beep();
-            }
-            return;
-        }
-    };
-
-    let (transcription, usage) = match provider
-        .transcribe(&all_samples, &config.global.language)
-        .await
+    let outcome = match providers::transcribe_with_fallback(
+        profile,
+        &config.keys,
+        &all_samples,
+        &config.global.language,
+    )
+    .await
     {
-        Ok(result) => result,
+        Ok(outcome) => outcome,
         Err(error) => {
             preserve_failure(recovery_id.as_deref(), &error.to_string());
-            error!(%error, "Transcription failed; audio preserved in Recovery");
-            if config.global.sound_enabled {
-                crate::audio_feedback::play_error_beep();
-            }
+            error!(kind = ?error.kind, %error, "Transcription failed across available models; audio preserved in Recovery");
+            if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
             return;
         }
     };
 
-    if transcription.is_empty() {
+    if outcome.text.is_empty() {
         preserve_failure(recovery_id.as_deref(), "Gemini returned an empty transcription");
         warn!("Empty transcription received; audio preserved in Recovery");
         return;
     }
 
     let final_text = if !profile.transforms.is_empty() {
-        transforms::run_pipeline(
-            &profile.transforms,
-            &transcription,
-            &config.global.language,
-        )
-        .await
+        transforms::run_pipeline(&profile.transforms, &outcome.text, &config.global.language).await
     } else {
-        transcription.clone()
+        outcome.text.clone()
     };
 
     if final_text.trim().is_empty() {
@@ -385,9 +317,19 @@ async fn state_recording(
         return;
     }
 
-    let record = crate::tracking::build_record(&profile.model, duration, &usage, &final_text);
+    if let Some(primary) = outcome.fallback_from.as_deref() {
+        info!(primary, model_used = %outcome.model_used, "Fallback transcription succeeded");
+    }
+
+    // Always account using the model that actually produced the transcript.
+    let record = crate::tracking::build_record(
+        &outcome.model_used,
+        duration,
+        &outcome.usage,
+        &final_text,
+    );
     let log_line = crate::tracking::format_log_line(&record, &config.global.currency);
-    info!("{}", log_line);
+    info!(model = %outcome.model_used, "{}", log_line);
 
     match crate::tracking::append_record(&record) {
         Ok(()) => {
@@ -405,20 +347,15 @@ async fn state_recording(
 
     let text = final_text.clone();
     let inject_result = tokio::task::spawn_blocking(move || injector::inject(&text)).await;
-
     match inject_result {
         Ok(Ok(())) => info!(text = %truncate(&final_text, 80), "✅ Injected"),
         Ok(Err(error)) => {
             error!(%error, "Text injection failed; transcription is available in dashboard history");
-            if config.global.sound_enabled {
-                crate::audio_feedback::play_error_beep();
-            }
+            if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
         }
         Err(error) => {
             error!(%error, "Injection task panicked; transcription is available in dashboard history");
-            if config.global.sound_enabled {
-                crate::audio_feedback::play_error_beep();
-            }
+            if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
         }
     }
 }
@@ -435,11 +372,7 @@ fn preserve_failure(id: Option<&str>, message: &str) {
 fn truncate(s: &str, max_chars: usize) -> String {
     let mut chars = s.chars();
     let prefix: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{}…", prefix)
-    } else {
-        prefix
-    }
+    if chars.next().is_some() { format!("{}…", prefix) } else { prefix }
 }
 
 #[cfg(test)]
