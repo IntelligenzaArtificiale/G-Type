@@ -34,6 +34,9 @@ pub async fn start_server_with_listener(
         .route("/api/state", get(api_state))
         .route("/api/history", get(api_history))
         .route("/api/statistics", get(api_statistics))
+        .route("/api/recovery", get(api_recovery))
+        .route("/api/recovery/{id}/retry", post(api_retry_recovery))
+        .route("/api/recovery/{id}/open", post(api_open_recovery))
         .route("/api/open_config", post(api_open_config))
         .route("/api/keys/gemini", put(api_update_gemini_key))
         .route("/api/profiles", post(api_create_profile))
@@ -101,6 +104,9 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config.read().await;
     let records = crate::tracking::load_records().unwrap_or_default();
     let stats = crate::tracking::Stats::from_records(&records);
+    let recovery_count = crate::app::recovery::list()
+        .map(|items| items.len())
+        .unwrap_or(0);
 
     let mut public_config = config.clone();
     public_config.keys.clear();
@@ -123,8 +129,10 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
                 "time_saved_secs": stats.time_saved_secs,
                 "count": stats.count,
             },
+            "recovery_count": recovery_count,
             "runtime": {
                 "live_profile_reload": true,
+                "recovery_spool": true,
                 "version": env!("CARGO_PKG_VERSION")
             }
         })),
@@ -137,6 +145,146 @@ async fn api_history() -> impl IntoResponse {
         Err(e) => {
             tracing::error!("Failed to load history: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn api_recovery() -> impl IntoResponse {
+    match crate::app::recovery::list() {
+        Ok(items) => (StatusCode::OK, Json(json!(items))).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "Failed to load recovery queue");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Impossibile leggere gli audio da recuperare"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn api_retry_recovery(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let (item, samples) = match crate::app::recovery::load(&id) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, id, "Recovery item not found or unreadable");
+            return not_found("Audio di recupero non trovato".into());
+        }
+    };
+
+    let config = state.config.read().await.clone();
+    let profile = config
+        .profiles
+        .iter()
+        .find(|profile| profile.name == item.profile)
+        .cloned()
+        .unwrap_or_else(|| {
+            let mut fallback = crate::config::Profile::default();
+            fallback.name = item.profile.clone();
+            fallback.model = item.model.clone();
+            fallback
+        });
+
+    let provider = match crate::providers::create_provider(&profile, &config.keys) {
+        Ok(provider) => provider,
+        Err(error) => {
+            let _ = crate::app::recovery::mark_failure(&id, &error.to_string());
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": error.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    let language = if item.language.trim().is_empty() {
+        config.global.language.as_str()
+    } else {
+        item.language.as_str()
+    };
+
+    let (transcription, usage) = match provider.transcribe(&samples, language).await {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = crate::app::recovery::mark_failure(&id, &error.to_string());
+            tracing::warn!(%error, id, "Recovery retry failed; WAV kept on disk");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": error.to_string(),
+                    "preserved": true
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if transcription.trim().is_empty() {
+        let message = "Gemini ha restituito una trascrizione vuota";
+        let _ = crate::app::recovery::mark_failure(&id, message);
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": message, "preserved": true})),
+        )
+            .into_response();
+    }
+
+    let final_text = if profile.transforms.is_empty() {
+        transcription
+    } else {
+        crate::transforms::run_pipeline(&profile.transforms, &transcription, language).await
+    };
+
+    if final_text.trim().is_empty() {
+        let message = "La pipeline ha prodotto testo vuoto";
+        let _ = crate::app::recovery::mark_failure(&id, message);
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": message, "preserved": true})),
+        )
+            .into_response();
+    }
+
+    let record = crate::tracking::build_record(
+        &profile.model,
+        item.duration_secs,
+        &usage,
+        &final_text,
+    );
+    if let Err(error) = crate::tracking::append_record(&record) {
+        let message = format!("Trascrizione riuscita ma salvataggio cronologia fallito: {error}");
+        let _ = crate::app::recovery::mark_failure(&id, &message);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": message, "preserved": true})),
+        )
+            .into_response();
+    }
+
+    if let Err(error) = crate::app::recovery::remove(&id) {
+        tracing::warn!(%error, id, "Recovered transcription saved but spool cleanup failed");
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "text": final_text,
+            "duration_secs": item.duration_secs
+        })),
+    )
+        .into_response()
+}
+
+async fn api_open_recovery(Path(id): Path<String>) -> impl IntoResponse {
+    match crate::app::recovery::open_audio(&id) {
+        Ok(()) => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
+        Err(error) => {
+            tracing::warn!(%error, id, "Failed to open recovery audio");
+            not_found("Audio di recupero non trovato".into())
         }
     }
 }
@@ -204,8 +352,16 @@ async fn api_statistics() -> impl IntoResponse {
         .collect::<Vec<_>>();
 
     let count = stats.count as f64;
-    let avg_words = if count > 0.0 { stats.total_words as f64 / count } else { 0.0 };
-    let avg_duration_secs = if count > 0.0 { stats.total_audio_secs / count } else { 0.0 };
+    let avg_words = if count > 0.0 {
+        stats.total_words as f64 / count
+    } else {
+        0.0
+    };
+    let avg_duration_secs = if count > 0.0 {
+        stats.total_audio_secs / count
+    } else {
+        0.0
+    };
     let speaking_wpm = if stats.total_audio_secs > 0.0 {
         stats.total_words as f64 / (stats.total_audio_secs / 60.0)
     } else {
@@ -444,7 +600,14 @@ fn mask_secret(value: &str) -> String {
     if value.is_empty() {
         return String::new();
     }
-    let suffix: String = value.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let suffix: String = value
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("••••••••{}", suffix)
 }
 
