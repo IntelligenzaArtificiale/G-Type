@@ -101,12 +101,7 @@ pub fn list() -> Result<Vec<RecoveryItem>> {
 }
 
 pub fn load(id: &str) -> Result<(RecoveryItem, Vec<i16>)> {
-    validate_id(id)?;
-    let meta = meta_path(id)?;
-    let raw = fs::read_to_string(&meta)
-        .with_context(|| format!("Cannot read recovery metadata {}", meta.display()))?;
-    let item: RecoveryItem = serde_json::from_str(&raw)
-        .with_context(|| format!("Invalid recovery metadata {}", meta.display()))?;
+    let item = load_item(id)?;
     let wav = fs::read(wav_path(id)?)
         .with_context(|| format!("Cannot read recovery WAV for {id}"))?;
     let samples = decode_pcm16_mono_wav(&wav)?;
@@ -114,16 +109,9 @@ pub fn load(id: &str) -> Result<(RecoveryItem, Vec<i16>)> {
 }
 
 pub fn mark_failure(id: &str, error: &str) -> Result<()> {
-    let (mut item, _) = load(id)?;
+    let mut item = load_item(id)?;
     item.attempts = item.attempts.saturating_add(1);
     item.last_error = Some(error.chars().take(500).collect());
-    save_item(&item)
-}
-
-pub fn mark_attempt(id: &str) -> Result<()> {
-    let (mut item, _) = load(id)?;
-    item.attempts = item.attempts.saturating_add(1);
-    item.last_error = None;
     save_item(&item)
 }
 
@@ -150,6 +138,15 @@ pub fn open_audio(id: &str) -> Result<()> {
     }
     open::that(&path).context("Cannot open recovery audio")?;
     Ok(())
+}
+
+fn load_item(id: &str) -> Result<RecoveryItem> {
+    validate_id(id)?;
+    let meta = meta_path(id)?;
+    let raw = fs::read_to_string(&meta)
+        .with_context(|| format!("Cannot read recovery metadata {}", meta.display()))?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("Invalid recovery metadata {}", meta.display()))
 }
 
 fn save_item(item: &RecoveryItem) -> Result<()> {

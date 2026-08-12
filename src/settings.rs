@@ -202,11 +202,10 @@ async fn api_retry_recovery(
         .iter()
         .find(|profile| profile.name == item.profile)
         .cloned()
-        .unwrap_or_else(|| {
-            let mut fallback = crate::config::Profile::default();
-            fallback.name = item.profile.clone();
-            fallback.model = item.model.clone();
-            fallback
+        .unwrap_or_else(|| crate::config::Profile {
+            name: item.profile.clone(),
+            model: item.model.clone(),
+            ..crate::config::Profile::default()
         });
 
     let provider = match crate::providers::create_provider(&profile, &config.keys) {
