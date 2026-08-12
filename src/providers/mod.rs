@@ -68,13 +68,6 @@ pub fn create_provider_for_model(
     )))
 }
 
-pub fn create_provider(
-    profile: &Profile,
-    keys: &HashMap<String, String>,
-) -> Result<Provider, gemini::GeminiError> {
-    create_provider_for_model(profile, keys, &profile.model)
-}
-
 pub async fn transcribe_exact(
     profile: &Profile,
     keys: &HashMap<String, String>,
@@ -175,6 +168,6 @@ mod tests {
             ..Profile::default()
         };
         let keys = HashMap::new();
-        assert!(create_provider(&profile, &keys).is_err());
+        assert!(create_provider_for_model(&profile, &keys, &profile.model).is_err());
     }
 }
