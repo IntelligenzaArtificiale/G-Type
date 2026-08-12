@@ -41,7 +41,6 @@ pub struct TranscriptionOutcome {
     pub fallback_from: Option<String>,
 }
 
-/// Instantiate a Gemini provider from a profile but with an explicit model.
 pub fn create_provider_for_model(
     profile: &Profile,
     keys: &HashMap<String, String>,
@@ -69,7 +68,6 @@ pub fn create_provider_for_model(
     )))
 }
 
-/// Compatibility helper for callers that explicitly want the profile model.
 pub fn create_provider(
     profile: &Profile,
     keys: &HashMap<String, String>,
@@ -77,8 +75,6 @@ pub fn create_provider(
     create_provider_for_model(profile, keys, &profile.model)
 }
 
-/// Transcribe using exactly one selected model. Used by dashboard recovery so
-/// the user's model choice is explicit and predictable.
 pub async fn transcribe_exact(
     profile: &Profile,
     keys: &HashMap<String, String>,
@@ -100,15 +96,27 @@ pub async fn transcribe_exact(
 /// Normal dictation path: use the configured model first. Only transient
 /// failures (429, 5xx, timeout/network) may move to up to two inexpensive,
 /// stable Flash-Lite fallbacks. Auth, bad request and configuration errors stop
-/// immediately. This avoids repeatedly hammering an overloaded model while
-/// keeping unexpected fallback costs bounded.
+/// immediately. A profile left on a retired model by an older G-Type release is
+/// migrated in-memory to the current recommended model rather than failing.
 pub async fn transcribe_with_fallback(
     profile: &Profile,
     keys: &HashMap<String, String>,
     audio: &[i16],
     language: &str,
 ) -> Result<TranscriptionOutcome, gemini::GeminiError> {
-    let primary = model_catalog::normalize_model_id(&profile.model).to_string();
+    let configured = model_catalog::normalize_model_id(&profile.model).to_string();
+    let primary = if model_catalog::is_selectable(&configured) {
+        configured.clone()
+    } else {
+        let recommended = model_catalog::normalize_model_id(model_catalog::recommended_model());
+        tracing::warn!(
+            configured_model = %configured,
+            replacement = %recommended,
+            "Configured Gemini model is retired/unsupported; using current recommended model"
+        );
+        recommended.to_string()
+    };
+
     let mut candidates = vec![primary.clone()];
     candidates.extend(
         model_catalog::fallback_models(&primary)
@@ -161,7 +169,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn current_profile_model_must_be_selectable() {
+    fn retired_profile_is_not_directly_selectable() {
         let profile = Profile {
             model: "models/gemini-2.0-flash".into(),
             ..Profile::default()
