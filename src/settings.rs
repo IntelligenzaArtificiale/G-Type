@@ -29,6 +29,7 @@ pub async fn start_server_with_listener(
 
     let app = Router::new()
         .route("/", get(serve_index))
+        .route("/recovery", get(serve_recovery))
         .route("/setup", get(serve_setup))
         .route("/setup", post(api_setup))
         .route("/api/state", get(api_state))
@@ -56,7 +57,27 @@ async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
     if config.keys.is_empty() {
         return Redirect::to("/setup").into_response();
     }
-    Html(include_str!("settings_ui.html")).into_response()
+    drop(config);
+
+    let recovery_count = crate::app::recovery::list()
+        .map(|items| items.len())
+        .unwrap_or(0);
+    let mut html = include_str!("settings_ui.html").to_string();
+    if recovery_count > 0 {
+        let banner = format!(
+            "</nav><a href=\"/recovery\" style=\"display:flex;align-items:center;justify-content:space-between;gap:14px;margin:-10px 0 20px;padding:12px 14px;border:1px solid rgba(245,158,11,.28);background:rgba(245,158,11,.08);border-radius:11px;color:#fcd34d;text-decoration:none;font-size:12px\"><span><strong>{recovery_count} audio da recuperare</strong> · le registrazioni sono al sicuro su disco</span><span>Apri recupero →</span></a>"
+        );
+        html = html.replacen("</nav>", &banner, 1);
+    }
+    Html(html).into_response()
+}
+
+async fn serve_recovery(State(state): State<AppState>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    if config.keys.is_empty() {
+        return Redirect::to("/setup").into_response();
+    }
+    Html(include_str!("recovery_ui.html")).into_response()
 }
 
 async fn serve_setup() -> impl IntoResponse {
