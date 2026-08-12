@@ -144,16 +144,17 @@ fn repair_record_cost(record: &mut TranscriptionRecord) -> bool {
     if record.total_cost_usd > 0.0 || (record.input_tokens == 0 && record.output_tokens == 0) {
         return false;
     }
-    if model_catalog::find(&record.model).is_none() {
+    let Some(spec) = model_catalog::find(&record.model) else {
         return false;
-    }
+    };
+    let canonical_model = spec.normalized_id();
 
     let usage = TokenUsage {
         prompt_tokens: record.input_tokens,
         candidates_tokens: record.output_tokens,
         ..TokenUsage::default()
     };
-    let (input, output, total) = tracking::calculate_cost(&record.model, &usage);
+    let (input, output, total) = tracking::calculate_cost(&canonical_model, &usage);
     if total <= 0.0 {
         return false;
     }
@@ -165,6 +166,17 @@ fn repair_record_cost(record: &mut TranscriptionRecord) -> bool {
 
 fn dashboard_records() -> Vec<(TranscriptionRecord, bool)> {
     tracking::load_records()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut record| {
+            let repaired = repair_record_cost(&mut record);
+            (record, repaired)
+        })
+        .collect()
+}
+
+fn dashboard_history_records() -> Vec<(TranscriptionRecord, bool)> {
+    tracking::load_recent_records(200)
         .unwrap_or_default()
         .into_iter()
         .map(|mut record| {
@@ -203,7 +215,8 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
     let mut public_config = config.clone();
     public_config.keys.clear();
     let gemini_key = config.keys.get("gemini").map(String::as_str).unwrap_or("");
-    let (currency_code, currency_symbol, currency_rate) = supported_currency(&config.global.currency);
+    let (currency_code, currency_symbol, currency_rate) =
+        supported_currency(&config.global.currency);
     let languages: Vec<_> = LANGUAGES
         .iter()
         .map(|(code, label)| json!({"code": code, "label": label}))
@@ -252,9 +265,7 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn api_history() -> impl IntoResponse {
-    let mut records = dashboard_records();
-    records.reverse();
-    records.truncate(200);
+    let records = dashboard_history_records();
     let payload: Vec<_> = records
         .into_iter()
         .map(|(record, repaired)| record_json(record, repaired))
@@ -274,7 +285,10 @@ async fn api_audio_devices() -> impl IntoResponse {
         Ok(found) => {
             for (label, _) in found {
                 let is_default = label.ends_with(" (DEFAULT)");
-                let name = label.strip_suffix(" (DEFAULT)").unwrap_or(&label).to_string();
+                let name = label
+                    .strip_suffix(" (DEFAULT)")
+                    .unwrap_or(&label)
+                    .to_string();
                 devices.push(json!({
                     "name": name,
                     "label": label,
@@ -524,21 +538,36 @@ async fn api_open_recovery(Path(id): Path<String>) -> impl IntoResponse {
 
 async fn api_statistics() -> impl IntoResponse {
     let repaired_records = dashboard_records();
-    let repaired_count = repaired_records.iter().filter(|(_, repaired)| *repaired).count();
-    let records: Vec<_> = repaired_records.into_iter().map(|(record, _)| record).collect();
+    let repaired_count = repaired_records
+        .iter()
+        .filter(|(_, repaired)| *repaired)
+        .count();
+    let records: Vec<_> = repaired_records
+        .into_iter()
+        .map(|(record, _)| record)
+        .collect();
     let stats = tracking::Stats::from_records(&records);
     let mut by_day: BTreeMap<String, (u64, u64, f64, f64)> = BTreeMap::new();
     let mut by_model: BTreeMap<String, (u64, u64, f64, f64)> = BTreeMap::new();
 
     for r in &records {
-        let day = r.timestamp.split('T').next().unwrap_or("unknown").to_string();
+        let day = r
+            .timestamp
+            .split('T')
+            .next()
+            .unwrap_or("unknown")
+            .to_string();
         let d = by_day.entry(day).or_insert((0, 0, 0.0, 0.0));
         d.0 += 1;
         d.1 += r.word_count as u64;
         d.2 += r.total_cost_usd;
         d.3 += r.audio_duration_secs;
 
-        let model = r.model.strip_prefix("models/").unwrap_or(&r.model).to_string();
+        let model = r
+            .model
+            .strip_prefix("models/")
+            .unwrap_or(&r.model)
+            .to_string();
         let m = by_model.entry(model).or_insert((0, 0, 0.0, 0.0));
         m.0 += 1;
         m.1 += r.word_count as u64;
@@ -697,7 +726,11 @@ async fn api_create_profile(
     if !valid_timeout(timeout_secs) {
         return bad_request("Timeout valido: da 3 a 180 secondi".into());
     }
-    if payload.provider.as_deref().is_some_and(|provider| provider != "gemini") {
+    if payload
+        .provider
+        .as_deref()
+        .is_some_and(|provider| provider != "gemini")
+    {
         return bad_request("Al momento è supportato solo il provider Gemini".into());
     }
 
@@ -744,11 +777,7 @@ async fn api_delete_profile(
     }
 
     match save_config(&config) {
-        StatusCode::OK => (
-            StatusCode::OK,
-            Json(json!({"ok": true, "live": true})),
-        )
-            .into_response(),
+        StatusCode::OK => (StatusCode::OK, Json(json!({"ok": true, "live": true}))).into_response(),
         code => code.into_response(),
     }
 }
@@ -817,7 +846,11 @@ async fn api_update_profile(
             return bad_request("Timeout valido: da 3 a 180 secondi".into());
         }
     }
-    if payload.provider.as_deref().is_some_and(|provider| provider != "gemini") {
+    if payload
+        .provider
+        .as_deref()
+        .is_some_and(|provider| provider != "gemini")
+    {
         return bad_request("Al momento è supportato solo il provider Gemini".into());
     }
 
