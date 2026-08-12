@@ -9,23 +9,6 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy)]
-pub struct ModelPricing {
-    pub input_audio_per_m: f64,
-    pub input_text_per_m: f64,
-    pub output_per_m: f64,
-}
-
-pub fn model_pricing(model: &str) -> Option<ModelPricing> {
-    let spec = crate::providers::model_catalog::find(model)?;
-    let (text, audio, output) = spec.pricing_for_prompt_tokens(0);
-    Some(ModelPricing {
-        input_audio_per_m: audio,
-        input_text_per_m: text,
-        output_per_m: output,
-    })
-}
-
 pub const CURRENCIES: &[(&str, &str, f64)] = &[
     ("USD", "$", 1.0),
     ("EUR", "€", 0.92),
@@ -80,7 +63,7 @@ pub struct TranscriptionRecord {
     pub text: String,
 }
 
-/// Token usage returned by Gemini. New modality fields are deliberately kept in
+/// Token usage returned by Gemini. Modality fields are deliberately kept in
 /// memory only: persisted records remain backward compatible while cost is
 /// calculated accurately at creation time.
 #[derive(Debug, Clone, Default)]
@@ -88,7 +71,6 @@ pub struct TokenUsage {
     pub prompt_tokens: u64,
     pub candidates_tokens: u64,
     pub thoughts_tokens: u64,
-    pub total_tokens: u64,
     pub audio_input_tokens: u64,
     pub text_input_tokens: u64,
 }
@@ -370,10 +352,23 @@ fn print_stats_section(stats: &Stats, currency: &str) {
     println!("     Transcriptions:  {}", stats.count);
     println!("     Words dictated:  {}", stats.total_words);
     println!("     Audio recorded:  {}", format_duration(stats.total_audio_secs));
-    println!("     Input cost:      {}", format_cost(stats.total_input_cost_usd, currency));
-    println!("     Output cost:     {}", format_cost(stats.total_output_cost_usd, currency));
-    println!("     \x1b[1mTotal cost:       {}\x1b[0m", format_cost(stats.total_cost_usd, currency));
-    println!("     ⏱️  Time saved:    {} (vs typing at {}wpm)\n", format_duration(stats.time_saved_secs), AVG_TYPING_WPM as u32);
+    println!(
+        "     Input cost:      {}",
+        format_cost(stats.total_input_cost_usd, currency)
+    );
+    println!(
+        "     Output cost:     {}",
+        format_cost(stats.total_output_cost_usd, currency)
+    );
+    println!(
+        "     \x1b[1mTotal cost:       {}\x1b[0m",
+        format_cost(stats.total_cost_usd, currency)
+    );
+    println!(
+        "     ⏱️  Time saved:    {} (vs typing at {}wpm)\n",
+        format_duration(stats.time_saved_secs),
+        AVG_TYPING_WPM as u32
+    );
 }
 
 pub fn format_log_line(record: &TranscriptionRecord, currency: &str) -> String {
@@ -401,17 +396,20 @@ mod tests {
         TokenUsage {
             prompt_tokens: prompt,
             candidates_tokens: output,
-            total_tokens: prompt + output,
             ..TokenUsage::default()
         }
     }
 
     #[test]
     fn current_prices_are_available() {
-        assert!((model_pricing("gemini-3.6-flash").unwrap().output_per_m - 7.50).abs() < 0.001);
-        assert!((model_pricing("gemini-3.5-flash-lite").unwrap().input_audio_per_m - 0.30).abs() < 0.001);
-        assert!((model_pricing("gemini-3.1-flash-lite").unwrap().input_audio_per_m - 0.50).abs() < 0.001);
-        assert!((model_pricing("gemini-2.5-flash-lite").unwrap().output_per_m - 0.40).abs() < 0.001);
+        let flash = crate::providers::model_catalog::find("gemini-3.6-flash").unwrap();
+        let lite = crate::providers::model_catalog::find("gemini-3.5-flash-lite").unwrap();
+        let flash31 = crate::providers::model_catalog::find("gemini-3.1-flash-lite").unwrap();
+        let lite25 = crate::providers::model_catalog::find("gemini-2.5-flash-lite").unwrap();
+        assert!((flash.output_per_m - 7.50).abs() < 0.001);
+        assert!((lite.input_audio_per_m - 0.30).abs() < 0.001);
+        assert!((flash31.input_audio_per_m - 0.50).abs() < 0.001);
+        assert!((lite25.output_per_m - 0.40).abs() < 0.001);
     }
 
     #[test]
@@ -451,12 +449,20 @@ mod tests {
 
     #[test]
     fn unknown_model_cost_is_zero() {
-        assert_eq!(calculate_cost("unknown", &usage(100, 50)), (0.0, 0.0, 0.0));
+        assert_eq!(
+            calculate_cost("unknown", &usage(100, 50)),
+            (0.0, 0.0, 0.0)
+        );
     }
 
     #[test]
     fn record_and_stats_still_work() {
-        let r = build_record("gemini-3.5-flash-lite", 3.5, &usage(100, 50), "ciao mondo test");
+        let r = build_record(
+            "gemini-3.5-flash-lite",
+            3.5,
+            &usage(100, 50),
+            "ciao mondo test",
+        );
         assert_eq!(r.word_count, 3);
         assert!(r.total_cost_usd > 0.0);
         let stats = Stats::from_records(&[r]);
