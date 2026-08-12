@@ -14,8 +14,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::config::ConfigV2;
+use crate::config::{ConfigV2, LANGUAGES};
 use crate::providers::model_catalog;
+use crate::tracking::{self, TokenUsage, TranscriptionRecord};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -35,9 +36,12 @@ pub async fn start_server_with_listener(
         .route("/setup", post(api_setup))
         .route("/api/state", get(api_state))
         .route("/api/models", get(api_models))
+        .route("/api/audio-devices", get(api_audio_devices))
+        .route("/api/global", put(api_update_global))
         .route("/api/history", get(api_history))
         .route("/api/statistics", get(api_statistics))
         .route("/api/recovery", get(api_recovery))
+        .route("/api/recovery/{id}", delete(api_delete_recovery))
         .route("/api/recovery/{id}/retry", post(api_retry_recovery))
         .route("/api/recovery/{id}/open", post(api_open_recovery))
         .route("/api/open_config", post(api_open_config))
@@ -54,49 +58,12 @@ pub async fn start_server_with_listener(
         .map_err(|e| anyhow::anyhow!("Axum server error: {}", e))
 }
 
-fn dashboard_model_options() -> Vec<Value> {
-    model_catalog::selectable_models()
-        .map(|spec| {
-            json!([
-                spec.normalized_id(),
-                format!(
-                    "{} · audio ${:.2}/M · output ${:.2}/M{}",
-                    spec.label,
-                    spec.input_audio_per_m,
-                    spec.output_per_m,
-                    if spec.status == "preview" { " · preview" } else { "" }
-                )
-            ])
-        })
-        .collect()
-}
-
 async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config.read().await;
     if config.keys.is_empty() {
         return Redirect::to("/setup").into_response();
     }
-    drop(config);
-
-    let recovery_count = crate::app::recovery::list()
-        .map(|items| items.len())
-        .unwrap_or(0);
-    let mut html = include_str!("settings_ui.html").to_string();
-
-    // Keep the dashboard HTML lightweight while making the Rust model catalog
-    // the single source of truth for all profile selectors.
-    let old_models = "const MODELS=[['models/gemini-2.0-flash','gemini-2.0-flash'],['models/gemini-2.5-flash','gemini-2.5-flash'],['models/gemini-2.5-flash-lite','gemini-2.5-flash-lite'],['models/gemini-2.5-pro','gemini-2.5-pro']];";
-    if let Ok(models_json) = serde_json::to_string(&dashboard_model_options()) {
-        html = html.replacen(old_models, &format!("const MODELS={models_json};"), 1);
-    }
-
-    if recovery_count > 0 {
-        let banner = format!(
-            "</nav><a href=\"/recovery\" style=\"display:flex;align-items:center;justify-content:space-between;gap:14px;margin:-10px 0 20px;padding:12px 14px;border:1px solid rgba(245,158,11,.28);background:rgba(245,158,11,.08);border-radius:11px;color:#fcd34d;text-decoration:none;font-size:12px\"><span><strong>{recovery_count} audio da recuperare</strong> · le registrazioni sono al sicuro su disco</span><span>Apri recupero →</span></a>"
-        );
-        html = html.replacen("</nav>", &banner, 1);
-    }
-    Html(html).into_response()
+    Html(include_str!("settings_ui.html")).into_response()
 }
 
 async fn serve_recovery(State(state): State<AppState>) -> impl IntoResponse {
@@ -155,21 +122,92 @@ async fn api_setup(
         profile.model = normalized_model(&payload.model);
         profile.hotkey = payload.hotkey.trim().to_string();
     } else {
-        let p = crate::config::Profile {
+        config.profiles.push(crate::config::Profile {
             model: normalized_model(&payload.model),
             hotkey: payload.hotkey.trim().to_string(),
             ..crate::config::Profile::default()
-        };
-        config.profiles.push(p);
+        });
     }
 
     save_config(&config).into_response()
 }
 
+fn supported_currency(code: &str) -> (&'static str, &'static str, f64) {
+    if code.eq_ignore_ascii_case("EUR") {
+        ("EUR", "€", tracking::exchange_rate("EUR"))
+    } else {
+        ("USD", "$", 1.0)
+    }
+}
+
+fn repair_record_cost(record: &mut TranscriptionRecord) -> bool {
+    if record.total_cost_usd > 0.0 || (record.input_tokens == 0 && record.output_tokens == 0) {
+        return false;
+    }
+    let Some(spec) = model_catalog::find(&record.model) else {
+        return false;
+    };
+    let canonical_model = spec.normalized_id();
+
+    let usage = TokenUsage {
+        prompt_tokens: record.input_tokens,
+        candidates_tokens: record.output_tokens,
+        ..TokenUsage::default()
+    };
+    let (input, output, total) = tracking::calculate_cost(&canonical_model, &usage);
+    if total <= 0.0 {
+        return false;
+    }
+    record.input_cost_usd = input;
+    record.output_cost_usd = output;
+    record.total_cost_usd = total;
+    true
+}
+
+fn dashboard_records() -> Vec<(TranscriptionRecord, bool)> {
+    tracking::load_records()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut record| {
+            let repaired = repair_record_cost(&mut record);
+            (record, repaired)
+        })
+        .collect()
+}
+
+fn dashboard_history_records() -> Vec<(TranscriptionRecord, bool)> {
+    tracking::load_recent_records(200)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut record| {
+            let repaired = repair_record_cost(&mut record);
+            (record, repaired)
+        })
+        .collect()
+}
+
+fn record_json(record: TranscriptionRecord, repaired: bool) -> Value {
+    json!({
+        "timestamp": record.timestamp,
+        "model": record.model,
+        "audio_duration_secs": record.audio_duration_secs,
+        "input_tokens": record.input_tokens,
+        "output_tokens": record.output_tokens,
+        "input_cost_usd": record.input_cost_usd,
+        "output_cost_usd": record.output_cost_usd,
+        "total_cost_usd": record.total_cost_usd,
+        "word_count": record.word_count,
+        "char_count": record.char_count,
+        "text": record.text,
+        "cost_repaired": repaired,
+    })
+}
+
 async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config.read().await;
-    let records = crate::tracking::load_records().unwrap_or_default();
-    let stats = crate::tracking::Stats::from_records(&records);
+    let repaired_records = dashboard_records();
+    let records: Vec<_> = repaired_records.iter().map(|(r, _)| r.clone()).collect();
+    let stats = tracking::Stats::from_records(&records);
     let recovery_count = crate::app::recovery::list()
         .map(|items| items.len())
         .unwrap_or(0);
@@ -177,11 +215,29 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
     let mut public_config = config.clone();
     public_config.keys.clear();
     let gemini_key = config.keys.get("gemini").map(String::as_str).unwrap_or("");
+    let (currency_code, currency_symbol, currency_rate) =
+        supported_currency(&config.global.currency);
+    let languages: Vec<_> = LANGUAGES
+        .iter()
+        .map(|(code, label)| json!({"code": code, "label": label}))
+        .collect();
 
     (
         StatusCode::OK,
         Json(json!({
             "config": public_config,
+            "currency": {
+                "code": currency_code,
+                "symbol": currency_symbol,
+                "rate": currency_rate
+            },
+            "options": {
+                "languages": languages,
+                "currencies": [
+                    {"code":"USD","label":"USD — US Dollar","symbol":"$"},
+                    {"code":"EUR","label":"EUR — Euro","symbol":"€"}
+                ]
+            },
             "providers": {
                 "gemini": {
                     "configured": !gemini_key.is_empty(),
@@ -197,6 +253,8 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
             "recovery_count": recovery_count,
             "runtime": {
                 "live_profile_reload": true,
+                "live_global_reload": true,
+                "tray_requires_restart": true,
                 "recovery_spool": true,
                 "model_fallback": true,
                 "pricing_reviewed_at": model_catalog::PRICING_REVIEWED_AT,
@@ -207,12 +265,93 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn api_history() -> impl IntoResponse {
-    match crate::tracking::load_recent_records(100) {
-        Ok(records) => (StatusCode::OK, Json(json!(records))).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to load history: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    let records = dashboard_history_records();
+    let payload: Vec<_> = records
+        .into_iter()
+        .map(|(record, repaired)| record_json(record, repaired))
+        .collect();
+    (StatusCode::OK, Json(json!(payload))).into_response()
+}
+
+async fn api_audio_devices() -> impl IntoResponse {
+    let mut devices = Vec::new();
+    devices.push(json!({
+        "name": "default",
+        "label": "Automatico / predefinito di sistema",
+        "default": true
+    }));
+
+    match crate::audio::list_input_devices() {
+        Ok(found) => {
+            for (label, _) in found {
+                let is_default = label.ends_with(" (DEFAULT)");
+                let name = label
+                    .strip_suffix(" (DEFAULT)")
+                    .unwrap_or(&label)
+                    .to_string();
+                devices.push(json!({
+                    "name": name,
+                    "label": label,
+                    "default": is_default
+                }));
+            }
+            (StatusCode::OK, Json(json!({"devices": devices}))).into_response()
         }
+        Err(error) => {
+            tracing::warn!(%error, "Unable to enumerate audio devices for dashboard");
+            (StatusCode::OK, Json(json!({"devices": devices}))).into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GlobalPayload {
+    language: String,
+    currency: String,
+    sound_enabled: bool,
+    tray_enabled: bool,
+    audio_device: Option<String>,
+}
+
+async fn api_update_global(
+    State(state): State<AppState>,
+    Json(payload): Json<GlobalPayload>,
+) -> impl IntoResponse {
+    let language = payload.language.trim();
+    if !LANGUAGES.iter().any(|(code, _)| *code == language) {
+        return bad_request("Lingua non supportata".into());
+    }
+    let currency = payload.currency.trim().to_ascii_uppercase();
+    if !matches!(currency.as_str(), "USD" | "EUR") {
+        return bad_request("Valuta supportata: USD oppure EUR".into());
+    }
+
+    let audio_device = payload
+        .audio_device
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "default")
+        .map(str::to_string);
+
+    let mut config = state.config.write().await;
+    let restart_required = config.global.tray_enabled != payload.tray_enabled;
+    config.global.language = language.to_string();
+    config.global.currency = currency;
+    config.global.sound_enabled = payload.sound_enabled;
+    config.global.tray_enabled = payload.tray_enabled;
+    config.global.audio_device = audio_device;
+
+    match save_config(&config) {
+        StatusCode::OK => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "live": true,
+                "restart_required": restart_required
+            })),
+        )
+            .into_response(),
+        code => code.into_response(),
     }
 }
 
@@ -226,6 +365,16 @@ async fn api_recovery() -> impl IntoResponse {
                 Json(json!({"error": "Impossibile leggere gli audio da recuperare"})),
             )
                 .into_response()
+        }
+    }
+}
+
+async fn api_delete_recovery(Path(id): Path<String>) -> impl IntoResponse {
+    match crate::app::recovery::remove(&id) {
+        Ok(()) => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
+        Err(error) => {
+            tracing::warn!(%error, id, "Failed to delete recovery audio");
+            not_found("Audio di recupero non trovato".into())
         }
     }
 }
@@ -344,13 +493,13 @@ async fn api_retry_recovery(
             .into_response();
     }
 
-    let record = crate::tracking::build_record(
+    let record = tracking::build_record(
         &outcome.model_used,
         item.duration_secs,
         &outcome.usage,
         &final_text,
     );
-    if let Err(error) = crate::tracking::append_record(&record) {
+    if let Err(error) = tracking::append_record(&record) {
         let message = format!("Trascrizione riuscita ma salvataggio cronologia fallito: {error}");
         let _ = crate::app::recovery::mark_failure(&id, &message);
         return (
@@ -370,7 +519,8 @@ async fn api_retry_recovery(
             "ok": true,
             "text": final_text,
             "duration_secs": item.duration_secs,
-            "model_used": outcome.model_used
+            "model_used": outcome.model_used,
+            "total_cost_usd": record.total_cost_usd
         })),
     )
         .into_response()
@@ -387,27 +537,37 @@ async fn api_open_recovery(Path(id): Path<String>) -> impl IntoResponse {
 }
 
 async fn api_statistics() -> impl IntoResponse {
-    let records = match crate::tracking::load_records() {
-        Ok(records) => records,
-        Err(e) => {
-            tracing::error!("Failed to load statistics: {}", e);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let stats = crate::tracking::Stats::from_records(&records);
+    let repaired_records = dashboard_records();
+    let repaired_count = repaired_records
+        .iter()
+        .filter(|(_, repaired)| *repaired)
+        .count();
+    let records: Vec<_> = repaired_records
+        .into_iter()
+        .map(|(record, _)| record)
+        .collect();
+    let stats = tracking::Stats::from_records(&records);
     let mut by_day: BTreeMap<String, (u64, u64, f64, f64)> = BTreeMap::new();
     let mut by_model: BTreeMap<String, (u64, u64, f64, f64)> = BTreeMap::new();
 
     for r in &records {
-        let day = r.timestamp.split('T').next().unwrap_or("unknown").to_string();
+        let day = r
+            .timestamp
+            .split('T')
+            .next()
+            .unwrap_or("unknown")
+            .to_string();
         let d = by_day.entry(day).or_insert((0, 0, 0.0, 0.0));
         d.0 += 1;
         d.1 += r.word_count as u64;
         d.2 += r.total_cost_usd;
         d.3 += r.audio_duration_secs;
 
-        let model = r.model.strip_prefix("models/").unwrap_or(&r.model).to_string();
+        let model = r
+            .model
+            .strip_prefix("models/")
+            .unwrap_or(&r.model)
+            .to_string();
         let m = by_model.entry(model).or_insert((0, 0, 0.0, 0.0));
         m.0 += 1;
         m.1 += r.word_count as u64;
@@ -486,6 +646,7 @@ async fn api_statistics() -> impl IntoResponse {
                 "speaking_wpm": speaking_wpm,
                 "cost_per_1000_words_usd": cost_per_1000_words
             },
+            "repaired_cost_records": repaired_count,
             "daily": daily,
             "models": models
         })),
@@ -528,12 +689,17 @@ async fn api_update_gemini_key(
     }
 }
 
+fn valid_timeout(timeout_secs: u64) -> bool {
+    (3..=180).contains(&timeout_secs)
+}
+
 #[derive(Deserialize)]
 struct CreateProfilePayload {
     name: String,
     hotkey: String,
     model: String,
     provider: Option<String>,
+    timeout_secs: Option<u64>,
     custom_prompt: Option<String>,
 }
 
@@ -543,6 +709,7 @@ async fn api_create_profile(
 ) -> impl IntoResponse {
     let name = payload.name.trim().to_string();
     let hotkey = payload.hotkey.trim().to_string();
+    let timeout_secs = payload.timeout_secs.unwrap_or(30);
 
     if name.is_empty() {
         return bad_request("Il nome del profilo non può essere vuoto".into());
@@ -556,6 +723,16 @@ async fn api_create_profile(
     if !model_catalog::is_selectable(&payload.model) {
         return bad_request("Modello Gemini non disponibile per la trascrizione".into());
     }
+    if !valid_timeout(timeout_secs) {
+        return bad_request("Timeout valido: da 3 a 180 secondi".into());
+    }
+    if payload
+        .provider
+        .as_deref()
+        .is_some_and(|provider| provider != "gemini")
+    {
+        return bad_request("Al momento è supportato solo il provider Gemini".into());
+    }
 
     let mut config = state.config.write().await;
     if config.profiles.iter().any(|p| p.name == name) {
@@ -565,16 +742,15 @@ async fn api_create_profile(
         return conflict("Questa hotkey è già usata da un altro profilo".into());
     }
 
-    let profile = crate::config::Profile {
+    config.profiles.push(crate::config::Profile {
         name: name.clone(),
         hotkey,
-        provider: payload.provider.unwrap_or_else(|| "gemini".to_string()),
+        provider: "gemini".to_string(),
         model: normalized_model(&payload.model),
-        timeout_secs: 10,
+        timeout_secs,
         transforms: vec![],
         custom_prompt: clean_prompt(payload.custom_prompt),
-    };
-    config.profiles.push(profile);
+    });
 
     match save_config(&config) {
         StatusCode::OK => (
@@ -601,11 +777,7 @@ async fn api_delete_profile(
     }
 
     match save_config(&config) {
-        StatusCode::OK => (
-            StatusCode::OK,
-            Json(json!({"ok": true, "live": true})),
-        )
-            .into_response(),
+        StatusCode::OK => (StatusCode::OK, Json(json!({"ok": true, "live": true}))).into_response(),
         code => code.into_response(),
     }
 }
@@ -616,6 +788,7 @@ struct UpdateProfilePayload {
     hotkey: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    timeout_secs: Option<u64>,
     custom_prompt: Option<String>,
 }
 
@@ -663,11 +836,22 @@ async fn api_update_profile(
     {
         return conflict("Questa hotkey è già usata da un altro profilo".into());
     }
-
     if let Some(ref model) = payload.model {
         if !model_catalog::is_selectable(model) {
             return bad_request("Modello Gemini non disponibile per la trascrizione".into());
         }
+    }
+    if let Some(timeout_secs) = payload.timeout_secs {
+        if !valid_timeout(timeout_secs) {
+            return bad_request("Timeout valido: da 3 a 180 secondi".into());
+        }
+    }
+    if payload
+        .provider
+        .as_deref()
+        .is_some_and(|provider| provider != "gemini")
+    {
+        return bad_request("Al momento è supportato solo il provider Gemini".into());
     }
 
     let p = &mut config.profiles[index];
@@ -676,8 +860,9 @@ async fn api_update_profile(
     if let Some(model) = payload.model.filter(|s| !s.trim().is_empty()) {
         p.model = normalized_model(&model);
     }
-    if let Some(provider) = payload.provider.filter(|s| !s.trim().is_empty()) {
-        p.provider = provider;
+    p.provider = "gemini".to_string();
+    if let Some(timeout_secs) = payload.timeout_secs {
+        p.timeout_secs = timeout_secs;
     }
     p.custom_prompt = clean_prompt(payload.custom_prompt);
 
