@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.5 — 2026-08-12
+
+- Preserves every completed recording as a local WAV before the Gemini request starts, so provider timeouts, 503 responses, network failures or interruptions during transcription no longer destroy the spoken audio.
+- Adds a local Recovery queue with `/recovery`, surfaced directly from the dashboard whenever preserved recordings exist.
+- Recovery items show duration, profile, model, failure reason and retry count; users can open the WAV or retry transcription later. Successful retries are written back into normal dashboard history.
+- Keeps recovery WAVs on disk until the transcription has also been persisted to history; injection failures therefore cannot erase the recovered text.
+- Replaces the fixed effective 10-second Gemini request timeout with an adaptive timeout based on recording duration. Typical budgets are ~25s for 20s audio, ~35s for 60s audio and ~82s for 245s audio, capped at 180s.
+- Detects microphone streams that start but emit no audio within 1.5 seconds, aborting early with an error beep instead of letting the user dictate for a long time into an empty buffer.
+- Keeps all recovery state local and filesystem-based; no database, background service or additional infrastructure is introduced.
+
 ## v1.4.4 — 2026-08-11
 
 - Fixes dashboard transcription copy failures caused by embedding arbitrary transcript text inside inline JavaScript attributes; UI actions now use safe event delegation and a clipboard fallback.
