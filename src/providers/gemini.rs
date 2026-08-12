@@ -15,6 +15,7 @@ use crate::tracking::TokenUsage;
 
 const MIN_TIMEOUT_SECS: u64 = 3;
 const MAX_TIMEOUT_SECS: u64 = 180;
+const ADAPTIVE_BASE_TIMEOUT_SECS: u64 = 20;
 
 pub struct GeminiProvider {
     pub api_key: String,
@@ -63,10 +64,12 @@ impl GeminiProvider {
         }
 
         let duration_secs = samples.len() as f64 / 16_000.0;
+        let effective_timeout_secs = adaptive_timeout_secs(self.timeout_secs, duration_secs);
         debug!(
             samples = samples.len(),
             duration_secs = format!("{:.1}", duration_secs),
-            timeout_secs = self.timeout_secs,
+            configured_timeout_secs = self.timeout_secs,
+            effective_timeout_secs,
             "Sending audio to Gemini API"
         );
 
@@ -92,7 +95,7 @@ impl GeminiProvider {
 
         debug!(model = %self.model, "Sending request to Gemini API");
 
-        let client = http_client(self.timeout_secs)?;
+        let client = http_client(effective_timeout_secs)?;
         let response = client
             .post(&url)
             .header("Content-Type", "application/json")
@@ -135,6 +138,18 @@ impl GeminiProvider {
 
         Ok((transcription, usage))
     }
+}
+
+fn adaptive_timeout_secs(configured_timeout_secs: u64, duration_secs: f64) -> u64 {
+    // Long recordings need materially more than the historical 10-second
+    // request budget. Keep the profile setting as a lower bound, then add a
+    // duration-aware network/model budget: 20s + 0.25s for each audio second.
+    // Examples: 20s audio -> 25s, 60s -> 35s, 245s -> ~82s.
+    let duration_budget = ADAPTIVE_BASE_TIMEOUT_SECS
+        .saturating_add((duration_secs.max(0.0) * 0.25).ceil() as u64);
+    configured_timeout_secs
+        .max(duration_budget)
+        .clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS)
 }
 
 fn build_request_body(wav_b64: &str, language: &str, custom_prompt: Option<&str>) -> Value {
@@ -286,6 +301,15 @@ mod tests {
         let samples: Vec<i16> = vec![100, -100, 0, i16::MAX, i16::MIN];
         let wav = encode_wav(&samples);
         assert_eq!(wav.len(), 44 + samples.len() * 2);
+    }
+
+    #[test]
+    fn test_adaptive_timeout_scales_with_audio() {
+        assert_eq!(adaptive_timeout_secs(10, 20.0), 25);
+        assert_eq!(adaptive_timeout_secs(10, 60.0), 35);
+        assert_eq!(adaptive_timeout_secs(10, 245.0), 82);
+        assert_eq!(adaptive_timeout_secs(120, 20.0), 120);
+        assert_eq!(adaptive_timeout_secs(10, 10_000.0), MAX_TIMEOUT_SECS);
     }
 
     #[test]
