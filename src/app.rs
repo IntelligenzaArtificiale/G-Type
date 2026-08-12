@@ -2,6 +2,9 @@
 // States: Idle → Recording → Processing → Injecting → Idle
 // All inter-thread communication via channels; failures return safely to Idle.
 
+#[path = "recovery.rs"]
+pub(crate) mod recovery;
+
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -30,8 +33,6 @@ pub async fn run_with_ui(
     let initial_hotkeys = parsed_hotkeys(&initial_cfg);
     let mut hotkey_signature = profile_hotkey_signature(&initial_cfg);
     let shared_hotkeys = input::SharedHotkeys::new(initial_hotkeys);
-    // Ignore a dirty edge caused by first-run creation/migration before the
-    // runtime starts. Future successful saves will produce a new edge.
     let _ = crate::config::take_runtime_dirty();
 
     let (input_tx, mut input_rx): (InputTx, InputRx) = mpsc::channel(32);
@@ -290,6 +291,25 @@ async fn state_recording(
         return;
     }
 
+    // Persist the complete stopped recording before touching the network. If
+    // Gemini times out, returns 503, the process is interrupted during the API
+    // call, or the user retries later, the spoken audio remains recoverable.
+    let recovery_id = match recovery::persist(
+        &all_samples,
+        &profile.name,
+        &profile.model,
+        &config.global.language,
+    ) {
+        Ok(item) => {
+            debug!(id = %item.id, "Recovery copy persisted");
+            Some(item.id)
+        }
+        Err(error) => {
+            error!(%error, "Could not persist recovery audio; continuing transcription");
+            None
+        }
+    };
+
     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Processing {
         profile: profile.name.clone(),
     }));
@@ -297,6 +317,7 @@ async fn state_recording(
     let provider = match providers::create_provider(profile, &config.keys) {
         Ok(provider) => provider,
         Err(error) => {
+            preserve_failure(recovery_id.as_deref(), &error.to_string());
             error!(%error, "Failed to create provider");
             if config.global.sound_enabled {
                 crate::audio_feedback::play_error_beep();
@@ -311,7 +332,8 @@ async fn state_recording(
     {
         Ok(result) => result,
         Err(error) => {
-            error!(%error, "Transcription failed");
+            preserve_failure(recovery_id.as_deref(), &error.to_string());
+            error!(%error, "Transcription failed; audio preserved in Recovery");
             if config.global.sound_enabled {
                 crate::audio_feedback::play_error_beep();
             }
@@ -320,7 +342,8 @@ async fn state_recording(
     };
 
     if transcription.is_empty() {
-        warn!("Empty transcription received, skipping injection");
+        preserve_failure(recovery_id.as_deref(), "Gemini returned an empty transcription");
+        warn!("Empty transcription received; audio preserved in Recovery");
         return;
     }
 
@@ -336,7 +359,8 @@ async fn state_recording(
     };
 
     if final_text.trim().is_empty() {
-        warn!("Transforms produced empty text, skipping injection");
+        preserve_failure(recovery_id.as_deref(), "Transforms produced empty text");
+        warn!("Transforms produced empty text; audio preserved in Recovery");
         return;
     }
 
@@ -344,8 +368,18 @@ async fn state_recording(
     let log_line = crate::tracking::format_log_line(&record, &config.global.currency);
     info!("{}", log_line);
 
-    if let Err(error) = crate::tracking::append_record(&record) {
-        warn!(%error, "Failed to save tracking record (non-fatal)");
+    match crate::tracking::append_record(&record) {
+        Ok(()) => {
+            if let Some(id) = recovery_id.as_deref() {
+                if let Err(error) = recovery::remove(id) {
+                    warn!(%error, id, "Transcription saved but recovery cleanup failed");
+                }
+            }
+        }
+        Err(error) => {
+            preserve_failure(recovery_id.as_deref(), &format!("Tracking save failed: {error}"));
+            warn!(%error, "Failed to save tracking record; recovery audio kept");
+        }
     }
 
     let text = final_text.clone();
@@ -354,16 +388,25 @@ async fn state_recording(
     match inject_result {
         Ok(Ok(())) => info!(text = %truncate(&final_text, 80), "✅ Injected"),
         Ok(Err(error)) => {
-            error!(%error, "Text injection failed");
+            error!(%error, "Text injection failed; transcription is available in dashboard history");
             if config.global.sound_enabled {
                 crate::audio_feedback::play_error_beep();
             }
         }
         Err(error) => {
-            error!(%error, "Injection task panicked");
+            error!(%error, "Injection task panicked; transcription is available in dashboard history");
             if config.global.sound_enabled {
                 crate::audio_feedback::play_error_beep();
             }
+        }
+    }
+}
+
+fn preserve_failure(id: Option<&str>, message: &str) {
+    if let Some(id) = id {
+        match recovery::mark_failure(id, message) {
+            Ok(()) => warn!(id, "Recording saved for dashboard recovery"),
+            Err(error) => error!(%error, id, "Failed to update recovery metadata"),
         }
     }
 }
