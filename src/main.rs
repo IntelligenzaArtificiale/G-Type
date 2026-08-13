@@ -1,7 +1,7 @@
 // main.rs — Entry point for the G-Type daemon.
 // Supports CLI subcommands for zero-friction user experience:
-//   g-type          → run daemon (auto-setup on first run)
-//   g-type setup    → interactive config wizard
+//   g-type          → run daemon (web onboarding on first run)
+//   g-type setup    → start if needed and open browser setup
 //   g-type set-key  → update API key without full setup
 //   g-type config   → print config file path
 
@@ -29,7 +29,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  (none)        Start the dictation daemon");
-    eprintln!("  setup         Run interactive setup wizard");
+    eprintln!("  setup         Open the browser-based setup");
     eprintln!("  set-key       Update your Gemini API key");
     eprintln!("  config        Show config file location");
     eprintln!("  stats         Show cost & usage statistics");
@@ -63,12 +63,12 @@ fn main() -> Result<()> {
         }
         Some("setup") => {
             if std::net::TcpStream::connect("127.0.0.1:9741").is_ok() {
-                println!("G-Type è già in esecuzione. Apertura pagina di setup nel browser...");
+                println!("G-Type è già in esecuzione. Apertura configurazione nel browser...");
                 let _ = open::that("http://127.0.0.1:9741/setup");
                 return Ok(());
             }
 
-            println!("Il demone non è in esecuzione. Avvio di G-Type in background...");
+            println!("Avvio G-Type e apertura configurazione nel browser...");
             std::process::Command::new(std::env::current_exe()?).spawn()?;
             std::thread::sleep(std::time::Duration::from_millis(500));
             let _ = open::that("http://127.0.0.1:9741/setup");
@@ -261,7 +261,7 @@ fn main() -> Result<()> {
     });
 
     if is_first_run {
-        info!("No API keys found. Launching initial web setup...");
+        info!("No API keys found. Launching browser onboarding...");
         if let Err(e) = open::that("http://127.0.0.1:9741/setup") {
             warn!("Could not open browser automatically: {}", e);
         }
@@ -272,7 +272,7 @@ fn main() -> Result<()> {
                 let current_cfg = cfg_shared.read().await;
                 if !current_cfg.keys.is_empty() {
                     cfg = current_cfg.clone();
-                    info!("Setup complete! Proceeding to background daemon.");
+                    info!("Web onboarding complete. Proceeding to background daemon.");
                     break;
                 }
             }
@@ -321,10 +321,6 @@ fn main() -> Result<()> {
     let mut tray_mgr: Option<tray::TrayManager> = None;
     let mut overlay_mgr: Option<overlay::OverlayManager> = None;
 
-    // Linux WebKit/GTK overlays can select X11 even in mixed Wayland/XWayland
-    // sessions and crash winit asynchronously with GLXBadWindow. Environment
-    // detection is therefore not reliable enough. The overlay is opt-in on
-    // Linux from v1.4.0; dictation, tray and the web dashboard stay enabled.
     #[cfg(target_os = "linux")]
     let overlay_enabled = std::env::var("G_TYPE_FORCE_OVERLAY").as_deref() == Ok("1");
     #[cfg(not(target_os = "linux"))]
