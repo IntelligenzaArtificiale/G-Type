@@ -122,24 +122,6 @@ persist_path(){
     export PATH="${INSTALL_DIR}:${PATH}"
 }
 
-setup_linux_autostart(){
-    [[ "$(uname -s)" == "Linux" ]] || return 0
-    local autostart_dir="${HOME}/.config/autostart"
-    local desktop_file="${autostart_dir}/g-type.desktop"
-
-    mkdir -p "$autostart_dir"
-    cat > "$desktop_file" <<EOF
-[Desktop Entry]
-Type=Application
-Name=G-Type
-Comment=Global voice dictation
-Exec=${BIN_PATH}
-Terminal=false
-X-GNOME-Autostart-enabled=true
-EOF
-    ok "Autoavvio Linux configurato"
-}
-
 start_gtype(){
     if command -v curl >/dev/null 2>&1 && curl -fsS --connect-timeout 1 http://127.0.0.1:9741/api/state >/dev/null 2>&1; then
         info "G-Type è già in esecuzione; non avvio una seconda istanza."
@@ -166,12 +148,12 @@ main(){
     info "Release: ${version}"
     install_binary "$version" "$platform"
     persist_path
-    setup_linux_autostart
     start_gtype
 
     echo
     echo -e "${GREEN}Installazione completata.${NC}"
     echo "Dashboard: http://127.0.0.1:9741/"
+    echo "Autoavvio: attivabile da Dashboard → Impostazioni → Sistema"
     echo "Aggiornamenti futuri: g-type upgrade"
     echo
 }
