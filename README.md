@@ -1,221 +1,326 @@
 # G-Type
 
-<p align="center">
-  <a href="README.md">English</a> •
-  <a href="README.it.md">Italiano</a> •
-  <a href="README.es.md">Español</a> •
-  <a href="README.pt-BR.md">Português (BR)</a> •
-  <a href="README.hi.md">हिन्दी</a>
-</p>
+**Global push-to-talk voice dictation powered by Google Gemini.**
 
-**Global voice dictation daemon.** Hold a hotkey anywhere on your system, speak, release — your words appear as typed text.
+G-Type runs locally in the background, listens only while you hold a configured hotkey, sends the captured audio to Gemini for transcription, and inserts the resulting text into the application you are currently using.
 
-Voice input is [**~3× faster** than typing](BENCHMARK.md) in text-entry scenarios ([Stanford/UW/Baidu, 2016](https://news.stanford.edu/stories/2016/08/stanford-study-speech-recognition-faster-texting)). G-Type removes the friction: one hotkey, zero UI, works in every app.
+It is designed around one idea: **install once, configure in the browser, then dictate anywhere with almost no friction.**
 
-Powered by Google Gemini REST API. Single static binary. ~5 MB.
+[Italiano](README.it.md)
 
----
+## What G-Type includes
 
-## How it works
+- Global push-to-talk dictation on supported desktop platforms.
+- Multiple profiles, each with its own hotkey, Gemini model, timeout and optional prompt.
+- A local dashboard at `http://127.0.0.1:9741/`.
+- Local transcription history, search, usage statistics and cost tracking.
+- USD / EUR display for current and historical costs.
+- Recovery of failed transcriptions: the WAV is kept locally when a request fails, then it can be retried with another model or deleted.
+- Automatic fallback to inexpensive stable models for transient Gemini failures.
+- Built-in profile templates for email, cleaned-up dictation, meeting notes, brainstorming, task lists, bug reports and other common work flows.
+- Automatic read-only check for newer G-Type releases.
+- Self-update with rollback protection through `g-type upgrade`.
+- Web-based first-run onboarding with Gemini API key verification before it is saved.
+- Crash-safe configuration writes with local backup recovery.
 
-```
-┌─────────┐    Hotkey     ┌───────────┐    PCM 16kHz    ┌───────────┐
-│ Keyboard │──────────────▶│   Audio   │────────────────▶│ REST API  │
-│  Hook    │   (rdev)      │  Capture  │   (buffered)    │  Gemini   │
-└─────────┘               └───────────┘                 └─────┬─────┘
-                                                              │
-                                                         text │
-                                                              ▼
-                          ┌───────────┐    keystrokes    ┌───────────┐
-                          │  Focused  │◀────────────────│ Injector  │
-                          │   App     │   or clipboard   │           │
-                          └───────────┘                 └───────────┘
-```
+G-Type does **not** require an account, a cloud database, a hosted G-Type backend or a browser extension.
 
-1. **Idle:** Daemon waits for your hotkey. Minimal resource usage.
-2. **Recording:** Microphone captures audio → converts to 16kHz mono PCM → buffers in memory.
-3. **Processing:** On key release, audio is encoded as WAV, sent to Gemini REST API, transcription returned.
-4. **Injection:** Text is typed via keystroke emulation. Falls back to clipboard paste for text >500 chars.
+## Supported prebuilt platforms
 
-## Install
+| Platform | Architecture | Prebuilt release |
+|---|---:|---:|
+| Linux | x86_64 | Yes |
+| Windows | x86_64 | Yes |
+| macOS | Intel x86_64 | Yes |
+| macOS | Apple Silicon arm64 | Yes |
 
-### One-click install (Linux & macOS)
+Other targets can be built from source, but the one-command installers below are intended for the prebuilt platforms above.
+
+## Install in one command
+
+### Linux and macOS
 
 ```bash
-curl -sSf https://raw.githubusercontent.com/IntelligenzaArtificiale/g-type/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.sh | bash
 ```
 
-### One-click install (Windows)
+The installer downloads the latest compatible GitHub Release, places `g-type` in your user environment and starts it. On the first run G-Type opens the onboarding page in your default browser.
 
-Open PowerShell and run:
+### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/IntelligenzaArtificiale/g-type/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.ps1 | iex
 ```
 
-Both installers will automatically:
-- Detect your OS and architecture
-- Install required system dependencies (Linux)
-- Download the latest pre-built binary
-- Add it to your PATH
-- Run the interactive setup wizard on first run
+Run the command in a normal PowerShell window. Administrator privileges are not required for the standard per-user installation.
 
-### Pre-built binaries
+## First-run onboarding
 
-Download from [Releases](https://github.com/IntelligenzaArtificiale/g-type/releases).
+There is no API-key questionnaire to complete in the terminal.
 
-### From source (all platforms)
+On the first start, G-Type launches its local server and opens:
+
+```text
+http://127.0.0.1:9741/setup
+```
+
+The onboarding is intentionally short:
+
+1. **Gemini API key** — enter the key and let G-Type verify it directly against the Gemini API before saving it.
+2. **Gemini model** — choose from the current audio-to-text-compatible model catalog; the recommended model is preselected.
+3. **Global hotkey** — keep the default `Ctrl+Shift+Space` or record another combination.
+
+After the final step, G-Type saves the local configuration and opens the dashboard.
+
+You can create a Gemini API key from Google AI Studio.
+
+## Daily use
+
+Start G-Type:
 
 ```bash
-# Prerequisites: Rust toolchain + system audio/input libraries
-# Linux: sudo apt install libasound2-dev libx11-dev libxtst-dev libxdo-dev libevdev-dev
-cargo install --path .
+g-type
 ```
 
-## First run
+Then hold your profile hotkey, speak, and release it when you are done. G-Type records only while the hotkey is held, transcribes the audio and inserts the result into the active application.
 
-On first launch, G-Type runs an interactive setup wizard:
+The default profile starts with:
 
-```
-╔══════════════════════════════════════════════╗
-║         G-Type — First Time Setup            ║
-╚══════════════════════════════════════════════╝
-
-  G-Type needs a Google Gemini API key to work.
-  Get one free at: https://aistudio.google.com/apikey
-
-? 🔑 Gemini API Key: ****************************************
-⠋ Verifying API key...
-✔ API key is valid!
-
-? 🤖 Select Gemini Model:
-  > models/gemini-2.0-flash
-    models/gemini-2.5-flash
-    models/gemini-2.5-flash-lite
-    models/gemini-2.5-pro
-    models/gemini-3-flash-preview
-    models/gemini-3-pro-preview
-    models/gemini-3.1-pro-preview
-
-? 🌍 Transcription Language:
-  > Auto-detect  (auto)
-    Italiano  (it)
-    English  (en)
-    Español  (es)
-    Français  (fr)
-    Deutsch  (de)
-    ...
-
-? 🔊 Enable sound feedback?
-  > Yes — play beeps on start/stop
-    No — silent mode
-
-? 💱 Display currency for cost tracking:
-  > USD  ($)
-    EUR  (€)
-    GBP  (£)
-    ...
-
-⌨️ Press your desired hotkey combo (e.g. hold Ctrl+Shift+Space)...
-  Captured hotkey: ctrl+shift+space
-
-  ✔ Config saved to ~/.config/g-type/config.toml
+```text
+Ctrl + Shift + Space
 ```
 
-Re-run anytime with `g-type setup`.
+Open the dashboard at:
 
-## Usage
+```text
+http://127.0.0.1:9741/
+```
+
+## Dashboard
+
+The dashboard is served only on the local loopback interface.
+
+### History
+
+- Recent transcriptions with five records per page.
+- Search by transcription text or model.
+- Expand / collapse long text.
+- Copy a transcription with one click.
+- Duration, word count, model and cost per transcription.
+- Repair display for older records whose cost can be reconstructed from stored token usage and model pricing.
+
+### Statistics
+
+- Total transcriptions and words.
+- Audio time and estimated typing time saved.
+- Speaking speed.
+- Cost totals and cost per 1,000 words.
+- Activity over the latest 14 days.
+- Usage and cost by model.
+
+### Settings
+
+From the dashboard you can manage the settings used by day-to-day dictation:
+
+- Language / automatic language detection.
+- Display currency: USD or EUR.
+- Input microphone.
+- Audio feedback sounds.
+- Tray icon.
+- Gemini API key, verified before replacement.
+- Profiles and profile templates.
+- Hotkeys, models, timeouts and custom profile prompts.
+- Current G-Type version and update status.
+
+Most profile and global changes are applied without restarting G-Type. Settings that depend on the desktop GUI integration can require a restart; the dashboard tells you when that is the case.
+
+### Recovery
+
+If a Gemini request fails, G-Type keeps the recorded WAV locally instead of silently losing the dictation.
+
+From **Recovery** you can:
+
+- Retry the exact same audio.
+- Select a different compatible Gemini model.
+- Open the local WAV.
+- Delete the failed recording permanently.
+
+Successful recovery writes the transcription to normal history and removes the recovery item.
+
+## Profiles
+
+A profile is a reusable dictation behavior bound to a hotkey.
+
+Each profile can define:
+
+- Name.
+- Global hotkey.
+- Gemini model.
+- Request timeout.
+- Optional prompt that turns raw speech into a specific work output.
+
+The dashboard includes ready-to-use templates such as:
+
+- Clean dictation.
+- Professional email.
+- Quick message.
+- Brainstorming to structured plan.
+- Meeting notes.
+- Tasks and checklist.
+- Prompt for an AI assistant.
+- Status update.
+- Formal text.
+- Bug report.
+
+Templates are normal profiles after creation; you can edit or delete them at any time.
+
+## Updates
+
+G-Type performs a lightweight, read-only release check in the background when its local dashboard starts. A failed update check never prevents dictation from starting.
+
+The dashboard also shows when a newer release is available.
+
+Update G-Type on every supported platform with the same command:
 
 ```bash
-g-type                # Start daemon (auto-setup on first run)
-g-type setup          # Re-run setup wizard
-g-type stats          # Show cost & usage statistics
-g-type upgrade        # Self-update to latest release
-g-type version        # Show current version
-g-type set-key KEY    # Update API key
-g-type config         # Show config file path
-g-type test-audio     # Test microphone (3 seconds)
-g-type list-devices   # List audio input devices
-RUST_LOG=g_type=debug g-type  # Verbose logging
+g-type upgrade
 ```
 
-Then in **any** application:
-1. Hold your hotkey (default: `CTRL+SHIFT+SPACE`) and speak
-2. Release the hotkey
-3. Text appears at cursor position
+Then restart the running daemon to use the new binary.
 
-## Configuration
-
-Config file locations:
-
-| OS      | Path                                           |
-|---------|------------------------------------------------|
-| Linux   | `~/.config/g-type/config.toml`                 |
-| macOS   | `~/Library/Application Support/g-type/config.toml` |
-| Windows | `%APPDATA%\g-type\config.toml`                 |
-
-| Key              | Default                   | Description                    |
-|------------------|---------------------------|--------------------------------|
-| `api_key`        | —                         | Google Gemini API key (required)|
-| `model`          | `models/gemini-2.0-flash` | Gemini model identifier        |
-| `hotkey`         | `ctrl+shift+space`        | Trigger key combination        |
-| `language`       | `auto`                    | Transcription language (auto, it, en, es, fr, de, ...) |
-| `sound_enabled`  | `true`                    | Play beeps on record start/stop |
-| `currency`       | `USD`                     | Display currency for cost tracking (USD, EUR, GBP, JPY, INR, BRL, CNY, KRW) |
-| `timeout_secs`   | `10`                      | HTTP request timeout (seconds) |
-
-## Architecture
-
-```
-src/
-├── main.rs           CLI entry point, subcommands
-├── app.rs            FSM: Idle → Recording → Processing → Injecting
-├── audio.rs          cpal capture, real-time downsample to 16kHz mono
-├── audio_feedback.rs rodio start/stop/error beeps
-├── network.rs        REST client, reqwest-retry, WAV encoding
-├── tracking.rs       Cost tracking, usage stats, JSONL storage
-├── upgrade.rs        Self-update from GitHub Releases
-├── input.rs          rdev global keyboard hook
-├── injector.rs       enigo keystrokes, arboard clipboard fallback
-└── config.rs         TOML config, dialoguer setup wizard
-```
-
-Key design choices:
-- **API key via header:** Sent as `x-goog-api-key`, never in URL or logs.
-- **API key verified at setup:** A test call to Gemini validates your key before saving.
-- **Auto-retry:** Exponential backoff on transient HTTP errors (429, 503).
-- **Error injection:** API errors are typed into the focused field so the user sees them.
-- **Audio feedback:** Beeps on record start, stop, and error (via `rodio`).
-- **Cost tracking:** Every transcription is logged with token counts, cost, and time saved. View with `g-type stats`.
-- **Self-update:** `g-type upgrade` fetches the latest release from GitHub and atomically replaces the binary.
-- **Pre-allocated buffers:** Audio buffer pre-sized for ~10s to avoid reallocations.
-- **Interactive hotkey capture:** Press your desired combo during setup — no manual typing.
-- **Graceful shutdown:** Catches SIGINT/SIGTERM for clean exit.
-
-## Building
+Check the installed version:
 
 ```bash
-cargo build            # Debug
-cargo build --release  # Optimized + stripped (~5 MB)
-cargo test             # Unit tests (35+ tests)
+g-type version
 ```
 
-## Requirements
+The updater downloads the release asset next to the current executable, validates the download before replacement, keeps a temporary backup and restores the previous executable if installation of the new binary fails.
 
-- Google Gemini API key ([get one free](https://aistudio.google.com/apikey))
-- Working microphone
-- **Linux:** ALSA, X11, XTest libs (`libasound2-dev libx11-dev libxtst-dev libxdo-dev libevdev-dev`)
-- **macOS:** Accessibility permissions for keyboard injection
-- **Windows:** No additional requirements
+## Useful commands
 
-## Contributing
+```text
+g-type                 Start the dictation daemon
+g-type setup           Start G-Type if needed and open web setup
+g-type stats           Show usage and cost statistics in the terminal
+g-type upgrade         Update to the latest compatible GitHub Release
+g-type version         Show the installed version
+g-type config          Show the exact configuration file path
+g-type set-key <KEY>   Replace the Gemini API key from the terminal
+g-type test-audio      Capture a short microphone test
+g-type list-devices    List available input devices
+g-type help            Show CLI help
+```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+For normal configuration, the dashboard is preferred over editing files manually.
 
-## Security
+## Data and privacy
 
-See [SECURITY.md](SECURITY.md).
+G-Type is local-first:
+
+- The dashboard binds to `127.0.0.1` rather than a public network interface.
+- Configuration and usage history are stored in the current user's local application directories.
+- The Gemini API key is stored in the local G-Type configuration and is not returned by the dashboard API; the UI receives only a masked representation.
+- Audio used for a transcription is sent to the configured Gemini API.
+- A failed transcription can leave a local WAV in the recovery spool so that it can be retried instead of lost.
+- G-Type does not require its own hosted account or cloud database.
+
+Use:
+
+```bash
+g-type config
+```
+
+to print the exact configuration path on the current operating system.
+
+## Reliability design
+
+The desktop daemon is intentionally small, but the critical paths are defensive:
+
+- Configuration writes use a temporary file plus backup and recovery.
+- A corrupt primary configuration can be restored from the last valid backup.
+- Gemini failures are classified so temporary overload / network problems are treated differently from authentication or invalid-request errors.
+- Temporary API failures can fall back to other stable Flash-Lite models instead of repeatedly hammering the same failing endpoint.
+- Failed recordings are preserved locally for manual recovery.
+- Self-update uses a temporary asset and rollback rather than blindly overwriting the running executable.
+- Update discovery is best-effort and never part of the critical recording path.
+- The local dashboard remains independent from any hosted G-Type service.
+
+## Troubleshooting
+
+### The dashboard does not open
+
+Make sure G-Type is running:
+
+```bash
+g-type
+```
+
+Then open:
+
+```text
+http://127.0.0.1:9741/
+```
+
+If G-Type reports that another instance is already running, the dashboard from that running instance should already be available on port `9741`.
+
+### Test the microphone
+
+```bash
+g-type test-audio
+```
+
+List input devices:
+
+```bash
+g-type list-devices
+```
+
+You can then select the preferred input device from Dashboard → Settings.
+
+### API key problems
+
+Open setup again:
+
+```bash
+g-type setup
+```
+
+or replace the key from Dashboard → Settings. G-Type verifies the new key before persisting it.
+
+### A transcription failed
+
+Open Dashboard → Recovery. If the WAV was preserved, you can retry it with another model without dictating the content again.
+
+### Linux overlay
+
+The dictation daemon, tray integration and local dashboard can run while the optional visual overlay is disabled. On Linux the overlay is intentionally conservative because mixed Wayland/XWayland/GTK environments can be unstable.
+
+## Build from source
+
+G-Type is written in Rust.
+
+```bash
+git clone https://github.com/IntelligenzaArtificiale/G-Type.git
+cd G-Type
+cargo build --release
+```
+
+Linux source builds require the native audio, X11/GTK/WebKit development libraries used by the desktop integration. See the CI workflow for the exact Ubuntu packages used by official builds.
+
+Run checks before contributing:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+## Release process
+
+Official releases are built by GitHub Actions for the supported targets. The release workflow runs quality checks before creating platform binaries and publishing the GitHub Release.
+
+`g-type upgrade` always resolves the latest published release and chooses the asset matching the current operating system and architecture.
 
 ## License
 
-[MIT](LICENSE)
+MIT. See [LICENSE](LICENSE).
