@@ -100,7 +100,7 @@ pub enum TransformConfig {
 }
 
 fn default_model() -> String {
-    "models/gemini-2.0-flash".into()
+    "models/gemini-3.5-flash-lite".into()
 }
 fn default_hotkey() -> String {
     "ctrl+shift+space".into()

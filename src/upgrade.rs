@@ -1,13 +1,24 @@
-// upgrade.rs — Self-update: fetch latest GitHub release and replace the binary.
+// upgrade.rs — Self-update and lightweight update checks from GitHub Releases.
 // Cross-platform: Linux, macOS, Windows.
 // Uses only reqwest (blocking) — no additional dependencies.
 
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 const REPO: &str = "IntelligenzaArtificiale/G-Type";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MIN_BINARY_BYTES: usize = 1_000_000;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateInfo {
+    pub current_version: String,
+    pub latest_version: String,
+    pub available: bool,
+    pub release_url: String,
+}
 
 /// Detect the asset name suffix for the current platform.
 /// Must match the artifact names in release.yml.
@@ -39,18 +50,17 @@ fn platform_asset_name() -> Result<&'static str> {
     }
 }
 
-/// Resolve the path of the currently running binary.
 fn current_binary_path() -> Result<PathBuf> {
     std::env::current_exe().context("Cannot determine path of the running binary")
 }
 
 /// Fetch the latest release tag and download URL from GitHub.
-/// Returns (tag, download_url).
 fn fetch_latest_release(asset_name: &str) -> Result<(String, String)> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
 
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
         .user_agent(format!("g-type/{}", CURRENT_VERSION))
         .build()
         .context("Failed to build HTTP client")?;
@@ -79,7 +89,6 @@ fn fetch_latest_release(asset_name: &str) -> Result<(String, String)> {
         .context("Release JSON missing 'tag_name'")?
         .to_string();
 
-    // Find the matching asset in the release
     let assets = body
         .get("assets")
         .and_then(|v| v.as_array())
@@ -93,7 +102,7 @@ fn fetch_latest_release(asset_name: &str) -> Result<(String, String)> {
                 asset
                     .get("browser_download_url")
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
+                    .map(str::to_string)
             } else {
                 None
             }
@@ -114,8 +123,7 @@ fn fetch_latest_release(asset_name: &str) -> Result<(String, String)> {
     Ok((tag, download_url))
 }
 
-/// Compare two semver-like version strings (e.g. "1.0.0" vs "1.1.0").
-/// Returns true if `latest` is strictly newer than `current`.
+/// Compare semver-like release strings (for example 1.4.7 and v1.4.8).
 fn is_newer(current: &str, latest: &str) -> bool {
     let parse = |v: &str| -> Vec<u64> {
         v.trim_start_matches('v')
@@ -140,9 +148,22 @@ fn is_newer(current: &str, latest: &str) -> bool {
     false
 }
 
-/// Download a file from a URL to a local path.
+/// Lightweight read-only update check. Safe to call in a background task.
+pub fn check_for_update() -> Result<UpdateInfo> {
+    let asset_name = platform_asset_name()?;
+    let (tag, _) = fetch_latest_release(asset_name)?;
+    let latest_version = tag.trim_start_matches('v').to_string();
+    Ok(UpdateInfo {
+        current_version: CURRENT_VERSION.to_string(),
+        latest_version,
+        available: is_newer(CURRENT_VERSION, &tag),
+        release_url: format!("https://github.com/{REPO}/releases/tag/{tag}"),
+    })
+}
+
 fn download_binary(url: &str, dest: &PathBuf) -> Result<()> {
     let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(120))
         .user_agent(format!("g-type/{}", CURRENT_VERSION))
         .build()
@@ -159,14 +180,26 @@ fn download_binary(url: &str, dest: &PathBuf) -> Result<()> {
     }
 
     let bytes = response.bytes().context("Failed to read download body")?;
+    if bytes.len() < MIN_BINARY_BYTES {
+        bail!(
+            "Downloaded asset is unexpectedly small ({} bytes); refusing to replace the current binary",
+            bytes.len()
+        );
+    }
 
-    fs::write(dest, &bytes)
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(dest)
+        .with_context(|| format!("Failed to create temporary binary {}", dest.display()))?;
+    file.write_all(&bytes)
         .with_context(|| format!("Failed to write binary to {}", dest.display()))?;
-
+    file.sync_all()
+        .with_context(|| format!("Failed to sync binary {}", dest.display()))?;
     Ok(())
 }
 
-/// Set executable permission on Unix.
 #[cfg(unix)]
 fn make_executable(path: &PathBuf) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -191,16 +224,13 @@ pub fn run_upgrade() -> Result<()> {
     println!("  Current version: \x1b[1mv{}\x1b[0m", CURRENT_VERSION);
     println!();
 
-    // Step 1: Detect platform
     let asset_name = platform_asset_name()?;
 
-    // Step 2: Fetch latest release info
     print!("  Checking for updates... ");
     let (tag, download_url) = fetch_latest_release(asset_name)?;
     let latest_version = tag.trim_start_matches('v');
     println!("\x1b[32m✔\x1b[0m");
 
-    // Step 3: Compare versions
     if !is_newer(CURRENT_VERSION, &tag) {
         println!(
             "  \x1b[32m✔ Already up to date!\x1b[0m (v{})",
@@ -215,24 +245,17 @@ pub fn run_upgrade() -> Result<()> {
         CURRENT_VERSION, latest_version
     );
 
-    // Step 4: Determine install path
     let current_path = current_binary_path()?;
     println!("  Binary location: {}", current_path.display());
 
-    // Step 5: Download to a temporary file next to the current binary
     let tmp_path = current_path.with_extension("upgrade-tmp");
+    let _ = fs::remove_file(&tmp_path);
     print!("  Downloading v{}... ", latest_version);
     download_binary(&download_url, &tmp_path)?;
     make_executable(&tmp_path)?;
     println!("\x1b[32m✔\x1b[0m");
 
-    // Step 6: Atomic-ish replace.
-    //   - On Unix: rename old → .bak, rename new → current, remove .bak
-    //   - On Windows: rename old → .bak, rename new → current
-    //     (Windows can rename a running exe, just can't delete it)
     let bak_path = current_path.with_extension("bak");
-
-    // Remove any previous backup
     let _ = fs::remove_file(&bak_path);
 
     print!("  Replacing binary... ");
@@ -244,20 +267,16 @@ pub fn run_upgrade() -> Result<()> {
         )
     })?;
 
-    if let Err(e) = fs::rename(&tmp_path, &current_path) {
-        // Rollback: restore the backup
+    if let Err(error) = fs::rename(&tmp_path, &current_path) {
         let _ = fs::rename(&bak_path, &current_path);
         let _ = fs::remove_file(&tmp_path);
-        return Err(e).context("Failed to install new binary (rolled back to previous version)");
+        return Err(error).context("Failed to install new binary (rolled back to previous version)");
     }
 
-    // Clean up backup (best-effort — on Windows the old exe may still be locked)
     let _ = fs::remove_file(&bak_path);
-    // Clean up tmp if it somehow still exists
     let _ = fs::remove_file(&tmp_path);
 
     println!("\x1b[32m✔\x1b[0m");
-
     println!();
     println!(
         "  \x1b[32m✔ Successfully upgraded to v{}!\x1b[0m",
@@ -305,7 +324,6 @@ mod tests {
 
     #[test]
     fn test_platform_asset_name() {
-        // Should return Ok on any supported CI/dev platform
         let result = platform_asset_name();
         assert!(result.is_ok(), "Platform should be supported: {:?}", result);
         let name = result.unwrap();

@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.4.8 — 2026-08-13
+
+- Replaces the first-run setup page with a compact three-step browser onboarding for API key, model and global hotkey; no terminal questionnaire is required.
+- Verifies Gemini API keys directly against the selected Gemini model before initial setup or dashboard key replacement is persisted.
+- Adds a best-effort, read-only update check that runs outside the recording path and never blocks daemon startup when GitHub is unavailable.
+- Exposes update state to the local dashboard and shows a concise notice when a newer release is available.
+- Hardens self-update with connection/overall timeouts, minimum download-size validation, synced temporary writes and the existing rollback path before replacing the current executable.
+- Fixes the default profile model for clean installations so a retired Gemini 2.0 endpoint can no longer be selected by the default configuration.
+- Rewrites the English and Italian README files around the current one-command install, web onboarding, dashboard, recovery, profile and update flows.
+- Clarifies the CLI setup command and first-run logs so they consistently describe browser-based configuration.
+
+## v1.4.7 — 2026-08-13
+
+- Redesigns Cronologia, Statistiche, Impostazioni and Recovery with a denser, more consistent desktop UI.
+- Reduces history pagination to five transcriptions per page and improves search, expand/collapse, copy and cost visibility.
+- Repairs zero-cost historical records in memory when the stored model and token counts are sufficient to reconstruct the cost.
+- Limits dashboard display currency to USD and EUR and applies the selected conversion consistently to historical data.
+- Makes language, currency, microphone, feedback sounds and tray configuration editable from the dashboard.
+- Adds full profile editing for name, hotkey, Gemini model, timeout and custom prompt.
+- Adds ten ready-to-use profile templates for common professional dictation workflows.
+- Adds explicit deletion of preserved recovery audio with confirmation while keeping model-selectable retry and WAV opening.
+
 ## v1.4.6 — 2026-08-13
 
 - Refreshes the Gemini audio-to-text model catalog and standard paid pricing from the official Google Gemini Developer API documentation, reviewed 2026-08-13.

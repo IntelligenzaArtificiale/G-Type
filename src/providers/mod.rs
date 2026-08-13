@@ -5,7 +5,14 @@ use crate::tracking::TokenUsage;
 
 pub mod gemini;
 #[path = "../model_catalog.rs"]
-pub mod model_catalog;
+mod raw_model_catalog;
+
+pub mod model_catalog {
+    pub use super::raw_model_catalog::{
+        fallback_models, find, is_selectable, normalize_model_id, recommended_model,
+        selectable_models, LIVE_AUDIO_MODELS, PRICING_REVIEWED_AT,
+    };
+}
 
 #[allow(dead_code)]
 pub mod openai {
