@@ -18,6 +18,9 @@ use crate::config::{ConfigV2, LANGUAGES};
 use crate::providers::model_catalog;
 use crate::tracking::{self, TokenUsage, TranscriptionRecord};
 
+#[path = "autostart.rs"]
+mod autostart;
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<RwLock<ConfigV2>>,
@@ -49,6 +52,7 @@ pub async fn start_server_with_listener(
         .route("/api/audio-devices", get(api_audio_devices))
         .route("/api/global", put(api_update_global))
         .route("/api/update", get(api_update_status))
+        .route("/api/autostart", get(api_autostart_status).put(api_update_autostart))
         .route("/api/verify-key", post(api_verify_key))
         .route("/api/history", get(api_history))
         .route("/api/statistics", get(api_statistics))
@@ -162,9 +166,10 @@ async fn api_verify_key(Json(payload): Json<VerifyKeyPayload>) -> impl IntoRespo
         .model
         .as_deref()
         .filter(|value| model_catalog::is_selectable(value))
-        .unwrap_or_else(model_catalog::recommended_model);
+        .map(str::to_string)
+        .unwrap_or_else(|| model_catalog::recommended_model().to_string());
 
-    match verify_gemini_key(api_key, model).await {
+    match verify_gemini_key(api_key, &model).await {
         Ok(()) => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
         Err(message) => bad_request(message),
     }
@@ -219,6 +224,41 @@ async fn api_update_status() -> impl IntoResponse {
         Err(error) => (
             StatusCode::OK,
             Json(json!({"ok": false, "error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_autostart_status() -> impl IntoResponse {
+    match autostart::is_enabled() {
+        Ok(enabled) => (
+            StatusCode::OK,
+            Json(json!({"ok": true, "supported": true, "enabled": enabled})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::OK,
+            Json(json!({"ok": false, "supported": false, "enabled": false, "error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct AutostartPayload {
+    enabled: bool,
+}
+
+async fn api_update_autostart(Json(payload): Json<AutostartPayload>) -> impl IntoResponse {
+    match autostart::set_enabled(payload.enabled) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"ok": true, "enabled": payload.enabled})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Impossibile aggiornare autoavvio: {error}")})),
         )
             .into_response(),
     }
@@ -350,6 +390,7 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
                 "recovery_spool": true,
                 "model_fallback": true,
                 "update_check": true,
+                "autostart_enabled": autostart::is_enabled().unwrap_or(false),
                 "pricing_reviewed_at": model_catalog::PRICING_REVIEWED_AT,
                 "version": env!("CARGO_PKG_VERSION")
             }
