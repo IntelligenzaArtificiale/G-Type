@@ -9,15 +9,9 @@ mod raw_model_catalog;
 
 pub mod model_catalog {
     pub use super::raw_model_catalog::{
-        fallback_models, find, is_selectable, normalize_model_id, selectable_models,
-        LiveAudioModel, ModelSpec, LIVE_AUDIO_MODELS, MODELS, PRICING_REVIEWED_AT,
-        RECOMMENDED_MODEL,
+        fallback_models, find, is_selectable, normalize_model_id, recommended_model,
+        selectable_models, LIVE_AUDIO_MODELS, PRICING_REVIEWED_AT,
     };
-
-    #[allow(clippy::needless_lifetimes)]
-    pub fn recommended_model<'a>() -> &'a str {
-        RECOMMENDED_MODEL
-    }
 }
 
 #[allow(dead_code)]
