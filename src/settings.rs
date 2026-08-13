@@ -29,6 +29,16 @@ pub async fn start_server_with_listener(
 ) -> Result<()> {
     let state = AppState { config };
 
+    tokio::task::spawn_blocking(|| match crate::upgrade::check_for_update() {
+        Ok(info) if info.available => tracing::info!(
+            current = %info.current_version,
+            latest = %info.latest_version,
+            "G-Type update available"
+        ),
+        Ok(_) => tracing::debug!("G-Type is up to date"),
+        Err(error) => tracing::debug!(%error, "Automatic update check unavailable"),
+    });
+
     let app = Router::new()
         .route("/", get(serve_index))
         .route("/recovery", get(serve_recovery))
@@ -38,6 +48,8 @@ pub async fn start_server_with_listener(
         .route("/api/models", get(api_models))
         .route("/api/audio-devices", get(api_audio_devices))
         .route("/api/global", put(api_update_global))
+        .route("/api/update", get(api_update_status))
+        .route("/api/verify-key", post(api_verify_key))
         .route("/api/history", get(api_history))
         .route("/api/statistics", get(api_statistics))
         .route("/api/recovery", get(api_recovery))
@@ -113,6 +125,9 @@ async fn api_setup(
     if api_key.is_empty() {
         return bad_request("La API key non può essere vuota".into());
     }
+    if let Err(message) = verify_gemini_key(api_key, &payload.model).await {
+        return bad_request(message);
+    }
 
     let mut config = state.config.write().await;
     config
@@ -130,6 +145,83 @@ async fn api_setup(
     }
 
     save_config(&config).into_response()
+}
+
+#[derive(Deserialize)]
+struct VerifyKeyPayload {
+    api_key: String,
+    model: Option<String>,
+}
+
+async fn api_verify_key(Json(payload): Json<VerifyKeyPayload>) -> impl IntoResponse {
+    let api_key = payload.api_key.trim();
+    if api_key.is_empty() {
+        return bad_request("Inserisci una Gemini API key".into());
+    }
+    let model = payload
+        .model
+        .as_deref()
+        .filter(|value| model_catalog::is_selectable(value))
+        .unwrap_or_else(model_catalog::recommended_model);
+
+    match verify_gemini_key(api_key, model).await {
+        Ok(()) => (StatusCode::OK, Json(json!({"ok": true}))).into_response(),
+        Err(message) => bad_request(message),
+    }
+}
+
+async fn verify_gemini_key(api_key: &str, model: &str) -> std::result::Result<(), String> {
+    if !model_catalog::is_selectable(model) {
+        return Err("Modello Gemini non valido per la verifica".into());
+    }
+
+    let model_id = model_catalog::normalize_model_id(model);
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{model_id}"
+    );
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|_| "Impossibile inizializzare la verifica della API key".to_string())?;
+
+    let response = client
+        .get(url)
+        .header("x-goog-api-key", api_key)
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                "Timeout durante la verifica della API key. Riprova tra qualche secondo.".to_string()
+            } else {
+                "Impossibile raggiungere Gemini per verificare la API key".to_string()
+            }
+        })?;
+
+    match response.status().as_u16() {
+        200..=299 => Ok(()),
+        401 | 403 => Err("API key Gemini non valida o senza permessi sufficienti".into()),
+        404 => Err("Il modello selezionato non è disponibile per questa API key".into()),
+        429 => Err("Gemini ha raggiunto il rate limit durante la verifica. Riprova tra poco.".into()),
+        500..=599 => Err("Gemini è temporaneamente non disponibile. Riprova tra poco.".into()),
+        code => Err(format!("Gemini ha rifiutato la verifica della API key (HTTP {code})")),
+    }
+}
+
+async fn api_update_status() -> impl IntoResponse {
+    match tokio::task::spawn_blocking(crate::upgrade::check_for_update).await {
+        Ok(Ok(info)) => (StatusCode::OK, Json(json!({"ok": true, "update": info}))).into_response(),
+        Ok(Err(error)) => (
+            StatusCode::OK,
+            Json(json!({"ok": false, "error": error.to_string()})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::OK,
+            Json(json!({"ok": false, "error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 fn supported_currency(code: &str) -> (&'static str, &'static str, f64) {
@@ -257,6 +349,7 @@ async fn api_state(State(state): State<AppState>) -> impl IntoResponse {
                 "tray_requires_restart": true,
                 "recovery_spool": true,
                 "model_fallback": true,
+                "update_check": true,
                 "pricing_reviewed_at": model_catalog::PRICING_REVIEWED_AT,
                 "version": env!("CARGO_PKG_VERSION")
             }
@@ -673,6 +766,18 @@ async fn api_update_gemini_key(
     let api_key = payload.api_key.trim();
     if api_key.is_empty() {
         return bad_request("La API key non può essere vuota".into());
+    }
+
+    let model = {
+        let config = state.config.read().await;
+        config
+            .profiles
+            .first()
+            .map(|profile| profile.model.clone())
+            .unwrap_or_else(|| model_catalog::recommended_model().to_string())
+    };
+    if let Err(message) = verify_gemini_key(api_key, &model).await {
+        return bad_request(message);
     }
 
     let mut config = state.config.write().await;
