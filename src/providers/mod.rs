@@ -14,6 +14,7 @@ pub mod model_catalog {
         RECOMMENDED_MODEL,
     };
 
+    #[allow(clippy::needless_lifetimes)]
     pub fn recommended_model<'a>() -> &'a str {
         RECOMMENDED_MODEL
     }
