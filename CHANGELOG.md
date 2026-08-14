@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.9 — 2026-08-14
+
+- Reorganizes the dashboard Settings page into five focused tabs: General, Profiles, Templates, API and System, without changing the underlying configuration model or adding new services.
+- Replaces the previous dense two-column settings wall with a single focused content area, clearer section descriptions and less visual competition between unrelated controls.
+- Keeps profile editing, template creation, Gemini key management, autostart, update checks and global settings fully functional while making each area reachable with one internal tab click.
+- Clarifies history scope: the persistent header and Statistics use the complete local history, while Cronologia explicitly labels the most recent records loaded for fast browsing and shows their partial cost/audio totals as such.
+- Normalizes dashboard numeric formatting to Italian conventions, using commas for decimals and periods for thousands across costs, durations and averages.
+- Rounds summary and total spending values to two decimals while retaining six-decimal precision for individual transcription costs and higher precision where small technical/model costs would otherwise lose useful detail.
+- Keeps history pagination at five transcriptions per page and preserves all existing recovery, profile, currency conversion and update behavior.
+
 ## v1.4.8 — 2026-08-13
 
 - Replaces the first-run setup page with a compact three-step browser onboarding for API key, model and global hotkey; no terminal questionnaire is required.
@@ -71,7 +81,7 @@
 ## v1.4.1 — 2026-08-11
 
 - Keeps the full v1.4 dashboard redesign and Linux `GLXBadWindow` safe-mode fix.
-- Makes GTK a Linux-only dependency so macOS and Windows release builds do not require GTK system libraries.
+- Makes GTK a Linux-only dependency so macOS/Windows release jobs do not require GTK system libs.
 - Patch release prepared for the cross-platform binary matrix.
 
 ## v1.4.0 — 2026-08-11
