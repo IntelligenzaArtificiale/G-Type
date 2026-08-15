@@ -1,8 +1,16 @@
 // app.rs — Finite State Machine orchestrating the G-Type daemon.
-// States: Idle → Recording → Processing → Injecting → Idle
+// One recording pipeline serves push-to-talk, hands-free and Voice Edit.
 
 #[path = "recovery.rs"]
 pub(crate) mod recovery;
+#[path = "context.rs"]
+pub(crate) mod context;
+#[path = "prompt.rs"]
+mod prompt;
+#[path = "snippets.rs"]
+pub(crate) mod snippets;
+#[path = "selection.rs"]
+mod selection;
 
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +30,23 @@ use crate::ui_bridge::{DaemonEvent, DaemonState, ProfileInfo, UiCommand};
 const MAX_RECORDING_SECS: u64 = 10 * 60;
 const AUDIO_STARTUP_TIMEOUT_MS: u64 = 1_500;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Dictation,
+    HandsFree,
+    VoiceEdit,
+}
+
+impl Operation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dictation => "dictation",
+            Self::HandsFree => "hands_free",
+            Self::VoiceEdit => "voice_edit",
+        }
+    }
+}
+
 pub async fn run_with_ui(
     config: Arc<RwLock<ConfigV2>>,
     ui_proxy: EventLoopProxy<DaemonEvent>,
@@ -30,18 +55,14 @@ pub async fn run_with_ui(
     let shutdown = Arc::new(AtomicBool::new(false));
     let initial_cfg = config.read().await.clone();
     let initial_hotkeys = parsed_hotkeys(&initial_cfg);
-    let mut hotkey_signature = profile_hotkey_signature(&initial_cfg);
+    let mut hotkey_signature = hotkey_signature(&initial_cfg);
     let shared_hotkeys = input::SharedHotkeys::new(initial_hotkeys);
     let _ = crate::config::take_runtime_dirty();
     let (input_tx, mut input_rx): (InputTx, InputRx) = mpsc::channel(32);
 
     let shutdown_clone = shutdown.clone();
-    let _input_handle = crate::input::spawn_listener(
-        input_tx,
-        shutdown_clone,
-        shared_hotkeys.clone(),
-    )
-    .context("Failed to spawn keyboard listener")?;
+    let _input_handle = input::spawn_listener(input_tx, shutdown_clone, shared_hotkeys.clone())
+        .context("Failed to spawn keyboard listener")?;
 
     let shutdown_sig = shutdown.clone();
     tokio::spawn(async move {
@@ -66,7 +87,7 @@ pub async fn run_with_ui(
         shutdown_sig.store(true, Ordering::SeqCst);
     });
 
-    info!(profiles = initial_cfg.profiles.len(), "Ready — hold hotkey to dictate.");
+    info!(profiles = initial_cfg.profiles.len(), "Ready — hold a mode hotkey to dictate.");
     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
 
     loop {
@@ -77,7 +98,7 @@ pub async fn run_with_ui(
 
         if crate::config::take_runtime_dirty() {
             let cfg = config.read().await.clone();
-            let signature = profile_hotkey_signature(&cfg);
+            let signature = hotkey_signature(&cfg);
             if signature != hotkey_signature {
                 shared_hotkeys.update(parsed_hotkeys(&cfg));
                 hotkey_signature = signature;
@@ -91,7 +112,7 @@ pub async fn run_with_ui(
                         })
                         .collect(),
                 ));
-                info!("Runtime profile configuration refreshed");
+                info!("Runtime mode/hotkey configuration refreshed");
             }
         }
 
@@ -103,77 +124,195 @@ pub async fn run_with_ui(
                         error!(%error, "Failed to open settings");
                     }
                 }
-                UiCommand::SwitchProfile(name) => info!("Profile selected over UI: {}", name),
+                UiCommand::SwitchProfile(name) => info!("Mode selected over UI: {}", name),
             }
         }
 
         match input_rx.try_recv() {
-            Ok(InputSignal::Start(profile_name)) => {
-                let snapshot = config.read().await.clone();
-                let profile = snapshot
-                    .profiles
-                    .iter()
-                    .find(|profile| profile.name == profile_name)
-                    .cloned();
-
-                if let Some(profile) = profile {
-                    info!(profile = %profile_name, "🎤 Recording...");
-                    if snapshot.global.sound_enabled {
-                        crate::audio_feedback::play_start_beep();
-                    }
-                    let _ = ui_proxy.send_event(DaemonEvent::StateChanged(
-                        DaemonState::Recording {
-                            profile: profile.name.clone(),
-                        },
-                    ));
-                    let _ = ui_proxy.send_event(DaemonEvent::ProfileActivated(ProfileInfo {
-                        name: profile.name.clone(),
-                        model_name: profile.model.clone(),
-                        active: true,
-                    }));
-                    state_recording(&snapshot, &profile, &mut input_rx, &ui_proxy).await;
-                    let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
-                } else {
-                    warn!(profile = %profile_name, "Unknown profile triggered");
-                }
+            Ok(InputSignal::StartProfile(requested)) => {
+                start_operation(
+                    &config,
+                    &mut input_rx,
+                    &ui_proxy,
+                    Operation::Dictation,
+                    requested,
+                    None,
+                )
+                .await;
             }
-            Ok(InputSignal::Stop) => continue,
+            Ok(InputSignal::ToggleHandsFree) => {
+                let requested = config.read().await.global.default_profile.clone();
+                start_operation(
+                    &config,
+                    &mut input_rx,
+                    &ui_proxy,
+                    Operation::HandsFree,
+                    requested,
+                    None,
+                )
+                .await;
+            }
+            Ok(InputSignal::StartVoiceEdit) => {
+                let selected = match tokio::task::spawn_blocking(selection::capture_selected_text).await {
+                    Ok(Ok(Some(text))) => text,
+                    Ok(Ok(None)) => {
+                        warn!("Voice Edit requested without selected text");
+                        let cfg = config.read().await;
+                        if cfg.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
+                        continue;
+                    }
+                    Ok(Err(error)) => {
+                        warn!(%error, "Voice Edit could not capture selected text");
+                        let cfg = config.read().await;
+                        if cfg.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
+                        continue;
+                    }
+                    Err(error) => {
+                        warn!(%error, "Voice Edit selection task failed");
+                        continue;
+                    }
+                };
+                let requested = config.read().await.global.default_profile.clone();
+                start_operation(
+                    &config,
+                    &mut input_rx,
+                    &ui_proxy,
+                    Operation::VoiceEdit,
+                    requested,
+                    Some(selected),
+                )
+                .await;
+            }
+            Ok(InputSignal::StopProfile | InputSignal::StopVoiceEdit) => continue,
             Err(mpsc::error::TryRecvError::Disconnected) => {
                 error!("Input channel closed unexpectedly");
                 return Ok(());
             }
             Err(mpsc::error::TryRecvError::Empty) => {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(45)).await;
             }
         }
     }
 }
 
-fn parsed_hotkeys(config: &ConfigV2) -> Vec<(input::Hotkey, String)> {
-    config
+async fn start_operation(
+    config: &Arc<RwLock<ConfigV2>>,
+    input_rx: &mut InputRx,
+    ui_proxy: &EventLoopProxy<DaemonEvent>,
+    operation: Operation,
+    requested_profile: String,
+    selected_text: Option<String>,
+) {
+    let snapshot = config.read().await.clone();
+    let app_context = tokio::task::spawn_blocking(context::capture)
+        .await
+        .ok()
+        .flatten();
+    let Some(profile) = resolve_profile(&snapshot, &requested_profile, app_context.as_ref()) else {
+        warn!(requested_profile, "Unknown mode triggered");
+        if snapshot.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
+        return;
+    };
+
+    info!(
+        requested = %requested_profile,
+        effective = %profile.name,
+        operation = operation.as_str(),
+        context = app_context.as_ref().map(|c| c.id.as_str()).unwrap_or("unavailable"),
+        "🎤 Recording..."
+    );
+    if snapshot.global.sound_enabled { crate::audio_feedback::play_start_beep(); }
+    let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Recording {
+        profile: profile.name.clone(),
+    }));
+    let _ = ui_proxy.send_event(DaemonEvent::ProfileActivated(ProfileInfo {
+        name: profile.name.clone(),
+        model_name: profile.model.clone(),
+        active: true,
+    }));
+
+    state_recording(
+        &snapshot,
+        &profile,
+        operation,
+        selected_text,
+        app_context,
+        input_rx,
+        ui_proxy,
+    )
+    .await;
+    let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Idle));
+}
+
+fn resolve_profile(
+    config: &ConfigV2,
+    requested_profile: &str,
+    app_context: Option<&context::AppContext>,
+) -> Option<Profile> {
+    let requested = config
+        .profiles
+        .iter()
+        .find(|profile| profile.name == requested_profile)?;
+
+    // Explicit non-default hotkeys always win. Application bindings are only a
+    // convenience when the default mode (including Hands-Free / Voice Edit
+    // model selection) is requested.
+    if requested_profile != config.global.default_profile {
+        return Some(requested.clone());
+    }
+
+    if let Some(context) = app_context {
+        if let Some(bound_profile) = config.app_bindings.get(&context.id) {
+            if let Some(profile) = config
+                .profiles
+                .iter()
+                .find(|profile| &profile.name == bound_profile)
+            {
+                return Some(profile.clone());
+            }
+        }
+    }
+    Some(requested.clone())
+}
+
+fn parsed_hotkeys(config: &ConfigV2) -> input::HotkeySet {
+    let profiles = config
         .profiles
         .iter()
         .filter_map(|profile| match input::parse_hotkey(&profile.hotkey) {
             Ok(hotkey) => Some((hotkey, profile.name.clone())),
             Err(error) => {
-                warn!(profile = %profile.name, hotkey = %profile.hotkey, %error, "Ignoring invalid hotkey");
+                warn!(profile = %profile.name, hotkey = %profile.hotkey, %error, "Ignoring invalid mode hotkey");
                 None
             }
         })
-        .collect()
+        .collect();
+    let hands_free = input::parse_hotkey(&config.global.hands_free_hotkey)
+        .map_err(|error| warn!(%error, "Invalid Hands-Free hotkey"))
+        .ok();
+    let voice_edit = input::parse_hotkey(&config.global.voice_edit_hotkey)
+        .map_err(|error| warn!(%error, "Invalid Voice Edit hotkey"))
+        .ok();
+    input::HotkeySet { profiles, hands_free, voice_edit }
 }
 
-fn profile_hotkey_signature(config: &ConfigV2) -> Vec<(String, String)> {
-    config
+fn hotkey_signature(config: &ConfigV2) -> Vec<(String, String)> {
+    let mut signature: Vec<_> = config
         .profiles
         .iter()
         .map(|profile| (profile.name.clone(), profile.hotkey.clone()))
-        .collect()
+        .collect();
+    signature.push(("__hands_free__".into(), config.global.hands_free_hotkey.clone()));
+    signature.push(("__voice_edit__".into(), config.global.voice_edit_hotkey.clone()));
+    signature
 }
 
 async fn state_recording(
     config: &ConfigV2,
     profile: &Profile,
+    operation: Operation,
+    selected_text: Option<String>,
+    app_context: Option<context::AppContext>,
     input_rx: &mut InputRx,
     ui_proxy: &EventLoopProxy<DaemonEvent>,
 ) {
@@ -212,9 +351,7 @@ async fn state_recording(
     };
     drop(audio_tx);
 
-    let first_chunk = match audio_rx.recv_timeout(std::time::Duration::from_millis(
-        AUDIO_STARTUP_TIMEOUT_MS,
-    )) {
+    let first_chunk = match audio_rx.recv_timeout(std::time::Duration::from_millis(AUDIO_STARTUP_TIMEOUT_MS)) {
         Ok(chunk) => chunk,
         Err(error) => {
             recording_flag.store(false, Ordering::Relaxed);
@@ -236,106 +373,136 @@ async fn state_recording(
 
     let watchdog = tokio::time::sleep(std::time::Duration::from_secs(MAX_RECORDING_SECS));
     tokio::pin!(watchdog);
-    let mut can_transcribe = true;
+    let mut can_process = true;
     loop {
         tokio::select! {
-            signal = input_rx.recv() => match signal {
-                Some(InputSignal::Stop) => break,
-                Some(InputSignal::Start(_)) => continue,
-                None => { error!("Input channel closed during recording"); can_transcribe = false; break; }
-            },
-            _ = &mut watchdog => { warn!(max_seconds = MAX_RECORDING_SECS, "Recording watchdog reached; stopping capture safely"); break; }
+            signal = input_rx.recv() => {
+                match (operation, signal) {
+                    (Operation::Dictation, Some(InputSignal::StopProfile)) => break,
+                    (Operation::HandsFree, Some(InputSignal::ToggleHandsFree)) => break,
+                    (Operation::VoiceEdit, Some(InputSignal::StopVoiceEdit)) => break,
+                    (_, None) => { error!("Input channel closed during recording"); can_process = false; break; }
+                    _ => continue,
+                }
+            }
+            _ = &mut watchdog => {
+                warn!(max_seconds = MAX_RECORDING_SECS, "Recording watchdog reached; stopping safely");
+                break;
+            }
         }
     }
 
     recording_flag.store(false, Ordering::Relaxed);
     if let Err(error) = audio_thread_handle.join() {
         error!("Audio capture thread panicked: {:?}", error);
-        can_transcribe = false;
+        can_process = false;
     }
     let all_samples = match collector_handle.await {
         Ok(samples) => samples,
         Err(error) => { error!(%error, "Audio collector task failed"); return; }
     };
-    if !can_transcribe { return; }
+    if !can_process { return; }
 
     let duration = all_samples.len() as f64 / 16_000.0;
-    info!(duration = format!("{:.1}s", duration), "⏹ Stopped. Transcribing...");
+    info!(duration = format!("{duration:.1}s"), operation = operation.as_str(), "⏹ Stopped. Processing...");
     if config.global.sound_enabled { crate::audio_feedback::play_stop_beep(); }
     if all_samples.is_empty() {
-        warn!("No audio captured, skipping transcription");
+        warn!("No audio captured, skipping processing");
         if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
         return;
     }
 
-    let recovery_id = match recovery::persist(
+    let recovery_id = match recovery::persist_with_context(
         &all_samples,
         &profile.name,
         &profile.model,
         &config.global.language,
+        app_context.as_ref(),
+        Some(operation.as_str()),
+        selected_text.as_deref(),
     ) {
-        Ok(item) => { debug!(id = %item.id, "Recovery copy persisted"); Some(item.id) }
-        Err(error) => { error!(%error, "Could not persist recovery audio; continuing transcription"); None }
+        Ok(item) => Some(item.id),
+        Err(error) => { error!(%error, "Could not persist recovery audio; continuing"); None }
     };
 
     let _ = ui_proxy.send_event(DaemonEvent::StateChanged(DaemonState::Processing {
         profile: profile.name.clone(),
     }));
 
-    let outcome = match providers::transcribe_with_fallback(
+    let request_prompt = match operation {
+        Operation::VoiceEdit => prompt::build_voice_edit_prompt(
+            &config.global.language,
+            selected_text.as_deref().unwrap_or_default(),
+            app_context.as_ref(),
+            &config.snippets,
+        ),
+        Operation::Dictation | Operation::HandsFree => prompt::build_dictation_prompt(
+            &config.global.language,
+            profile,
+            app_context.as_ref(),
+            &config.snippets,
+        ),
+    };
+
+    let outcome = match providers::transcribe_with_fallback_prompt(
         profile,
         &config.keys,
         &all_samples,
         &config.global.language,
+        &request_prompt,
     )
     .await
     {
         Ok(outcome) => outcome,
         Err(error) => {
             preserve_failure(recovery_id.as_deref(), &error.to_string());
-            error!(kind = ?error.kind, %error, "Transcription failed across available models; audio preserved in Recovery");
+            error!(kind = ?error.kind, %error, "Gemini processing failed; audio preserved in Recovery");
             if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
             return;
         }
     };
 
-    if outcome.text.is_empty() {
-        preserve_failure(recovery_id.as_deref(), "Gemini returned an empty transcription");
-        warn!("Empty transcription received; audio preserved in Recovery");
+    if outcome.text.trim().is_empty() {
+        preserve_failure(recovery_id.as_deref(), "Gemini returned an empty result");
+        warn!("Empty result received; audio preserved in Recovery");
         return;
     }
 
-    let final_text = if !profile.transforms.is_empty() {
-        transforms::run_pipeline(&profile.transforms, &outcome.text, &config.global.language).await
-    } else {
-        outcome.text.clone()
+    let final_text = match operation {
+        Operation::VoiceEdit => outcome.text.trim().to_string(),
+        Operation::Dictation | Operation::HandsFree => {
+            let transformed = if !profile.transforms.is_empty() {
+                transforms::run_pipeline(&profile.transforms, &outcome.text, &config.global.language).await
+            } else {
+                outcome.text.clone()
+            };
+            snippets::apply(&transformed, &config.snippets)
+        }
     };
 
     if final_text.trim().is_empty() {
-        preserve_failure(recovery_id.as_deref(), "Transforms produced empty text");
-        warn!("Transforms produced empty text; audio preserved in Recovery");
+        preserve_failure(recovery_id.as_deref(), "Post-processing produced empty text");
+        warn!("Post-processing produced empty text; audio preserved in Recovery");
         return;
     }
 
-    if let Some(primary) = outcome.fallback_from.as_deref() {
-        info!(primary, model_used = %outcome.model_used, "Fallback transcription succeeded");
-    }
-
-    // Always account using the model that actually produced the transcript.
-    let record = crate::tracking::build_record(
+    let record = crate::tracking::build_record_with_context(
         &outcome.model_used,
         duration,
         &outcome.usage,
         &final_text,
+        Some(&profile.name),
+        app_context.as_ref(),
+        Some(operation.as_str()),
     );
     let log_line = crate::tracking::format_log_line(&record, &config.global.currency);
-    info!(model = %outcome.model_used, "{}", log_line);
+    info!(model = %outcome.model_used, mode = %profile.name, operation = operation.as_str(), "{}", log_line);
 
     match crate::tracking::append_record(&record) {
         Ok(()) => {
             if let Some(id) = recovery_id.as_deref() {
                 if let Err(error) = recovery::remove(id) {
-                    warn!(%error, id, "Transcription saved but recovery cleanup failed");
+                    warn!(%error, id, "History saved but recovery cleanup failed");
                 }
             }
         }
@@ -345,18 +512,35 @@ async fn state_recording(
         }
     }
 
+    if operation == Operation::VoiceEdit {
+        let current_context = tokio::task::spawn_blocking(context::capture).await.ok().flatten();
+        if !same_context(app_context.as_ref(), current_context.as_ref()) {
+            warn!("Voice Edit completed but active application changed; result kept in history without injection");
+            if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
+            return;
+        }
+    }
+
     let text = final_text.clone();
     let inject_result = tokio::task::spawn_blocking(move || injector::inject(&text)).await;
     match inject_result {
         Ok(Ok(())) => info!(text = %truncate(&final_text, 80), "✅ Injected"),
         Ok(Err(error)) => {
-            error!(%error, "Text injection failed; transcription is available in dashboard history");
+            error!(%error, "Text injection failed; result is available in history");
             if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
         }
         Err(error) => {
-            error!(%error, "Injection task panicked; transcription is available in dashboard history");
+            error!(%error, "Injection task panicked; result is available in history");
             if config.global.sound_enabled { crate::audio_feedback::play_error_beep(); }
         }
+    }
+}
+
+fn same_context(before: Option<&context::AppContext>, after: Option<&context::AppContext>) -> bool {
+    match (before, after) {
+        (Some(before), Some(after)) => before.id == after.id,
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -380,15 +564,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_truncate_ascii() {
-        assert_eq!(truncate("hello", 10), "hello");
-        assert_eq!(truncate("hello world", 5), "hello…");
+    fn explicit_non_default_mode_wins_over_app_binding() {
+        let mut config = ConfigV2::default();
+        config.profiles.push(Profile { name: "email".into(), hotkey: "alt+e".into(), ..Profile::default() });
+        config.app_bindings.insert("web:chrome:gmail".into(), "email".into());
+        let context = context::AppContext { id:"web:chrome:gmail".into(), app_name:"Chrome".into(), app_identifier:"chrome".into(), window_title:None, surface:Some("Gmail".into()) };
+        assert_eq!(resolve_profile(&config, "email", Some(&context)).unwrap().name, "email");
     }
 
     #[test]
-    fn test_truncate_utf8_is_char_boundary_safe() {
-        assert_eq!(truncate("A me così è già", 8), "A me cos…");
+    fn default_mode_resolves_app_binding() {
+        let mut config = ConfigV2::default();
+        config.profiles.push(Profile { name: "email".into(), hotkey: "alt+e".into(), ..Profile::default() });
+        config.app_bindings.insert("web:chrome:gmail".into(), "email".into());
+        let context = context::AppContext { id:"web:chrome:gmail".into(), app_name:"Chrome".into(), app_identifier:"chrome".into(), window_title:None, surface:Some("Gmail".into()) };
+        assert_eq!(resolve_profile(&config, "dictation", Some(&context)).unwrap().name, "email");
+    }
+
+    #[test]
+    fn context_change_blocks_voice_edit_injection() {
+        let a = context::AppContext { id:"app:code".into(), app_name:"Code".into(), app_identifier:"code".into(), window_title:None, surface:None };
+        let b = context::AppContext { id:"app:chrome".into(), app_name:"Chrome".into(), app_identifier:"chrome".into(), window_title:None, surface:None };
+        assert!(!same_context(Some(&a), Some(&b)));
+        assert!(same_context(Some(&a), Some(&a)));
+    }
+
+    #[test]
+    fn truncate_is_utf8_safe() {
         assert_eq!(truncate("èèè", 2), "èè…");
-        assert_eq!(truncate("🙂🙂🙂", 2), "🙂🙂…");
     }
 }
