@@ -61,11 +61,14 @@ pub struct TranscriptionRecord {
     pub char_count: u32,
     #[serde(default)]
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_context: Option<crate::context::AppContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
 }
 
-/// Token usage returned by Gemini. Modality fields are deliberately kept in
-/// memory only: persisted records remain backward compatible while cost is
-/// calculated accurately at creation time.
 #[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
     pub prompt_tokens: u64,
@@ -95,19 +98,13 @@ pub fn calculate_cost(model: &str, usage: &TokenUsage) -> (f64, f64, f64) {
 
     let input_cost = if detailed_input > 0 {
         let other_tokens = usage.prompt_tokens.saturating_sub(detailed_input);
-        // Unknown/non-audio modalities are charged at the general text/image
-        // rate. G-Type itself currently sends only text + audio.
         ((usage.audio_input_tokens as f64 * audio_rate)
             + ((usage.text_input_tokens + other_tokens) as f64 * text_rate))
             / 1_000_000.0
     } else {
-        // Older API responses may not include promptTokensDetails. Treating all
-        // prompt tokens as audio is conservative and preserves historical
-        // behavior rather than under-reporting cost.
         usage.prompt_tokens as f64 * audio_rate / 1_000_000.0
     };
 
-    // Google bills thinking tokens at the output rate as well.
     let output_cost =
         usage.billable_output_tokens() as f64 * output_rate / 1_000_000.0;
     let total = input_cost + output_cost;
@@ -119,6 +116,26 @@ pub fn build_record(
     audio_duration_secs: f64,
     usage: &TokenUsage,
     transcription: &str,
+) -> TranscriptionRecord {
+    build_record_with_context(
+        model,
+        audio_duration_secs,
+        usage,
+        transcription,
+        None,
+        None,
+        None,
+    )
+}
+
+pub fn build_record_with_context(
+    model: &str,
+    audio_duration_secs: f64,
+    usage: &TokenUsage,
+    transcription: &str,
+    profile_name: Option<&str>,
+    app_context: Option<&crate::context::AppContext>,
+    operation: Option<&str>,
 ) -> TranscriptionRecord {
     let (input_cost, output_cost, total_cost) = calculate_cost(model, usage);
     TranscriptionRecord {
@@ -133,6 +150,9 @@ pub fn build_record(
         word_count: transcription.split_whitespace().count() as u32,
         char_count: transcription.chars().count() as u32,
         text: transcription.to_string(),
+        profile_name: profile_name.map(str::to_string),
+        app_context: app_context.cloned(),
+        operation: operation.map(str::to_string),
     }
 }
 
@@ -457,17 +477,36 @@ mod tests {
 
     #[test]
     fn record_and_stats_still_work() {
-        let r = build_record(
+        let context = crate::context::AppContext {
+            id: "app:code".into(),
+            app_name: "Code".into(),
+            app_identifier: "code".into(),
+            window_title: Some("main.rs".into()),
+            surface: None,
+        };
+        let r = build_record_with_context(
             "gemini-3.5-flash-lite",
             3.5,
             &usage(100, 50),
             "ciao mondo test",
+            Some("dictation"),
+            Some(&context),
+            Some("dictation"),
         );
         assert_eq!(r.word_count, 3);
         assert!(r.total_cost_usd > 0.0);
+        assert_eq!(r.app_context.as_ref().unwrap().id, "app:code");
         let stats = Stats::from_records(&[r]);
         assert_eq!(stats.count, 1);
         assert_eq!(stats.total_words, 3);
+    }
+
+    #[test]
+    fn old_json_without_context_remains_readable() {
+        let raw = r#"{"timestamp":"2026-01-01T00:00:00Z","model":"models/gemini-3.5-flash-lite","audio_duration_secs":1.0,"input_tokens":1,"output_tokens":1,"input_cost_usd":0.0,"output_cost_usd":0.0,"total_cost_usd":0.0,"word_count":1,"char_count":4,"text":"ciao"}"#;
+        let record: TranscriptionRecord = serde_json::from_str(raw).unwrap();
+        assert!(record.app_context.is_none());
+        assert!(record.profile_name.is_none());
     }
 
     #[test]
