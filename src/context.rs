@@ -307,6 +307,7 @@ fn last_quoted_value(value: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn parse_tabbed(value: &str) -> Option<(String, String, Option<String>)> {
     let mut parts = value.trim().splitn(3, '\t');
     let app = parts.next()?.trim().to_string();

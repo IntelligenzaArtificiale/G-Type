@@ -39,15 +39,6 @@ fn meta_path(id: &str) -> Result<PathBuf> {
     Ok(data_dir()?.join(format!("{id}.json")))
 }
 
-pub fn persist(
-    samples: &[i16],
-    profile: &str,
-    model: &str,
-    language: &str,
-) -> Result<RecoveryItem> {
-    persist_with_context(samples, profile, model, language, None, None, None)
-}
-
 pub fn persist_with_context(
     samples: &[i16],
     profile: &str,

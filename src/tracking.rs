@@ -103,23 +103,6 @@ pub fn calculate_cost(model: &str, usage: &TokenUsage) -> (f64, f64, f64) {
     (input_cost, output_cost, input_cost + output_cost)
 }
 
-pub fn build_record(
-    model: &str,
-    audio_duration_secs: f64,
-    usage: &TokenUsage,
-    transcription: &str,
-) -> TranscriptionRecord {
-    build_record_with_context(
-        model,
-        audio_duration_secs,
-        usage,
-        transcription,
-        None,
-        None,
-        None,
-    )
-}
-
 pub fn build_record_with_context(
     model: &str,
     audio_duration_secs: f64,

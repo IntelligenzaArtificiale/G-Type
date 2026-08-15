@@ -469,6 +469,13 @@ async fn state_recording(
             return;
         }
     };
+    if let Some(primary_model) = outcome.fallback_from.as_deref() {
+        info!(
+            primary_model = %primary_model,
+            fallback_model = %outcome.model_used,
+            "Gemini transcription completed using fallback model"
+        );
+    }
     if outcome.text.trim().is_empty() {
         preserve_failure(recovery_id.as_deref(), "Gemini returned an empty result");
         warn!("Empty result received; audio preserved in Recovery");
