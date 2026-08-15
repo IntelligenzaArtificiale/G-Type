@@ -87,7 +87,13 @@ fn normalize(
 fn sanitize(value: &str, max_chars: usize) -> String {
     value
         .chars()
-        .map(|ch| if matches!(ch, '\n' | '\r' | '\t') { ' ' } else { ch })
+        .map(|ch| {
+            if matches!(ch, '\n' | '\r' | '\t') {
+                ' '
+            } else {
+                ch
+            }
+        })
         .filter(|ch| !ch.is_control())
         .take(max_chars)
         .collect::<String>()
@@ -252,8 +258,8 @@ fn capture_linux() -> Option<(String, String, Option<String>)> {
         return None;
     }
     let text = String::from_utf8_lossy(&props.stdout);
-    let title = property_string(&text, "_NET_WM_NAME")
-        .or_else(|| property_string(&text, "WM_NAME"));
+    let title =
+        property_string(&text, "_NET_WM_NAME").or_else(|| property_string(&text, "WM_NAME"));
     let class = property_string(&text, "WM_CLASS").unwrap_or_default();
     let pid = property_u32(&text, "_NET_WM_PID");
     let process_name = pid
@@ -274,7 +280,10 @@ fn capture_linux() -> Option<(String, String, Option<String>)> {
 fn property_string(text: &str, name: &str) -> Option<String> {
     text.lines()
         .find(|line| line.starts_with(name))
-        .and_then(|line| line.split_once('=').map(|(_, value)| value.trim().to_string()))
+        .and_then(|line| {
+            line.split_once('=')
+                .map(|(_, value)| value.trim().to_string())
+        })
         .and_then(|value| {
             let unquoted = value.trim_matches('"').trim().to_string();
             (!unquoted.is_empty() && unquoted != "not found.").then_some(unquoted)

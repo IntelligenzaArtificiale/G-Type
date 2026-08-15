@@ -16,10 +16,14 @@ pub fn validate(snippets: &[Snippet]) -> Result<(), String> {
             return Err("La chiave di uno snippet non può essere vuota".into());
         }
         if trigger.chars().count() > MAX_TRIGGER_CHARS {
-            return Err(format!("Chiave snippet troppo lunga (max {MAX_TRIGGER_CHARS} caratteri)"));
+            return Err(format!(
+                "Chiave snippet troppo lunga (max {MAX_TRIGGER_CHARS} caratteri)"
+            ));
         }
         if snippet.value.chars().count() > MAX_VALUE_CHARS {
-            return Err(format!("Valore snippet troppo lungo (max {MAX_VALUE_CHARS} caratteri)"));
+            return Err(format!(
+                "Valore snippet troppo lungo (max {MAX_VALUE_CHARS} caratteri)"
+            ));
         }
         let normalized = trigger.to_lowercase();
         if !seen.insert(normalized) {
@@ -88,7 +92,13 @@ fn sanitize_prompt_value(value: &str, max_chars: usize) -> String {
     value
         .chars()
         .filter(|ch| !ch.is_control() || *ch == ' ')
-        .map(|ch| if ch == '\n' || ch == '\r' || ch == '\t' { ' ' } else { ch })
+        .map(|ch| {
+            if ch == '\n' || ch == '\r' || ch == '\t' {
+                ' '
+            } else {
+                ch
+            }
+        })
         .take(max_chars)
         .collect::<String>()
         .split_whitespace()
@@ -101,12 +111,19 @@ mod tests {
     use super::*;
 
     fn snippet(trigger: &str, value: &str) -> Snippet {
-        Snippet { trigger: trigger.into(), value: value.into(), enabled: true }
+        Snippet {
+            trigger: trigger.into(),
+            value: value.into(),
+            enabled: true,
+        }
     }
 
     #[test]
     fn replaces_ascii_trigger_case_insensitively() {
-        let result = apply("Ti mando Link Calendario domani", &[snippet("link calendario", "https://cal.test")]);
+        let result = apply(
+            "Ti mando Link Calendario domani",
+            &[snippet("link calendario", "https://cal.test")],
+        );
         assert_eq!(result, "Ti mando https://cal.test domani");
     }
 

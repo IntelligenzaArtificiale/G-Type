@@ -64,6 +64,8 @@ fn send_copy_shortcut() -> Result<()> {
     let click = enigo.key(Key::Unicode('c'), Direction::Click);
     let release = enigo.key(modifier, Direction::Release);
     click.map_err(|error| anyhow::anyhow!("Impossibile inviare copia: {error:?}"))?;
-    release.map_err(|error| anyhow::anyhow!("Impossibile rilasciare il modificatore copia: {error:?}"))?;
+    release.map_err(|error| {
+        anyhow::anyhow!("Impossibile rilasciare il modificatore copia: {error:?}")
+    })?;
     Ok(())
 }

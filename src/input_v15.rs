@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+#[cfg(target_os = "linux")]
+use tracing::warn;
+use tracing::{error, info};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputSignal {
@@ -56,10 +58,7 @@ impl SharedHotkeys {
 
     pub fn update(&self, bindings: HotkeySet) {
         let count = bindings.profiles.len();
-        *self
-            .bindings
-            .write()
-            .expect("SharedHotkeys lock poisoned") = bindings;
+        *self.bindings.write().expect("SharedHotkeys lock poisoned") = bindings;
         info!(count, "Hotkey bindings updated");
     }
 
@@ -98,9 +97,7 @@ pub fn parse_hotkey(raw: &str) -> Result<Hotkey> {
                 if trigger.is_some() {
                     anyhow::bail!("Multiple trigger keys in '{raw}'");
                 }
-                trigger = Some(
-                    str_to_key(part).with_context(|| format!("Unknown key '{part}'"))?,
-                );
+                trigger = Some(str_to_key(part).with_context(|| format!("Unknown key '{part}'"))?);
             }
         }
     }
@@ -114,19 +111,54 @@ pub fn parse_hotkey(raw: &str) -> Result<Hotkey> {
 
 fn str_to_key(name: &str) -> Result<Key> {
     Ok(match name {
-        "a" => Key::KeyA, "b" => Key::KeyB, "c" => Key::KeyC, "d" => Key::KeyD,
-        "e" => Key::KeyE, "f" => Key::KeyF, "g" => Key::KeyG, "h" => Key::KeyH,
-        "i" => Key::KeyI, "j" => Key::KeyJ, "k" => Key::KeyK, "l" => Key::KeyL,
-        "m" => Key::KeyM, "n" => Key::KeyN, "o" => Key::KeyO, "p" => Key::KeyP,
-        "q" => Key::KeyQ, "r" => Key::KeyR, "s" => Key::KeyS, "t" => Key::KeyT,
-        "u" => Key::KeyU, "v" => Key::KeyV, "w" => Key::KeyW, "x" => Key::KeyX,
-        "y" => Key::KeyY, "z" => Key::KeyZ,
-        "0" => Key::Num0, "1" => Key::Num1, "2" => Key::Num2, "3" => Key::Num3,
-        "4" => Key::Num4, "5" => Key::Num5, "6" => Key::Num6, "7" => Key::Num7,
-        "8" => Key::Num8, "9" => Key::Num9,
-        "f1" => Key::F1, "f2" => Key::F2, "f3" => Key::F3, "f4" => Key::F4,
-        "f5" => Key::F5, "f6" => Key::F6, "f7" => Key::F7, "f8" => Key::F8,
-        "f9" => Key::F9, "f10" => Key::F10, "f11" => Key::F11, "f12" => Key::F12,
+        "a" => Key::KeyA,
+        "b" => Key::KeyB,
+        "c" => Key::KeyC,
+        "d" => Key::KeyD,
+        "e" => Key::KeyE,
+        "f" => Key::KeyF,
+        "g" => Key::KeyG,
+        "h" => Key::KeyH,
+        "i" => Key::KeyI,
+        "j" => Key::KeyJ,
+        "k" => Key::KeyK,
+        "l" => Key::KeyL,
+        "m" => Key::KeyM,
+        "n" => Key::KeyN,
+        "o" => Key::KeyO,
+        "p" => Key::KeyP,
+        "q" => Key::KeyQ,
+        "r" => Key::KeyR,
+        "s" => Key::KeyS,
+        "t" => Key::KeyT,
+        "u" => Key::KeyU,
+        "v" => Key::KeyV,
+        "w" => Key::KeyW,
+        "x" => Key::KeyX,
+        "y" => Key::KeyY,
+        "z" => Key::KeyZ,
+        "0" => Key::Num0,
+        "1" => Key::Num1,
+        "2" => Key::Num2,
+        "3" => Key::Num3,
+        "4" => Key::Num4,
+        "5" => Key::Num5,
+        "6" => Key::Num6,
+        "7" => Key::Num7,
+        "8" => Key::Num8,
+        "9" => Key::Num9,
+        "f1" => Key::F1,
+        "f2" => Key::F2,
+        "f3" => Key::F3,
+        "f4" => Key::F4,
+        "f5" => Key::F5,
+        "f6" => Key::F6,
+        "f7" => Key::F7,
+        "f8" => Key::F8,
+        "f9" => Key::F9,
+        "f10" => Key::F10,
+        "f11" => Key::F11,
+        "f12" => Key::F12,
         "space" | "spacebar" => Key::Space,
         "enter" | "return" => Key::Return,
         "tab" => Key::Tab,
@@ -278,7 +310,9 @@ impl HookState {
                 return;
             }
             self.active_hold = Some(HoldAction::Profile(name.clone()));
-            let _ = self.tx.blocking_send(InputSignal::StartProfile(name.clone()));
+            let _ = self
+                .tx
+                .blocking_send(InputSignal::StartProfile(name.clone()));
         }
     }
 
@@ -409,7 +443,10 @@ fn spawn_evdev_listener(
                 return;
             }
 
-            info!(devices = readers.len(), "Wayland evdev keyboard listener started");
+            info!(
+                devices = readers.len(),
+                "Wayland evdev keyboard listener started"
+            );
             for reader in readers {
                 let _ = reader.join();
             }
@@ -471,29 +508,91 @@ fn evdev_loop(
 #[cfg(target_os = "linux")]
 fn linux_keycode(code: u16) -> Option<Key> {
     Some(match code {
-        1 => Key::Escape, 2 => Key::Num1, 3 => Key::Num2, 4 => Key::Num3,
-        5 => Key::Num4, 6 => Key::Num5, 7 => Key::Num6, 8 => Key::Num7,
-        9 => Key::Num8, 10 => Key::Num9, 11 => Key::Num0, 12 => Key::Minus,
-        13 => Key::Equal, 14 => Key::Backspace, 15 => Key::Tab, 16 => Key::KeyQ,
-        17 => Key::KeyW, 18 => Key::KeyE, 19 => Key::KeyR, 20 => Key::KeyT,
-        21 => Key::KeyY, 22 => Key::KeyU, 23 => Key::KeyI, 24 => Key::KeyO,
-        25 => Key::KeyP, 26 => Key::LeftBracket, 27 => Key::RightBracket,
-        28 => Key::Return, 29 => Key::ControlLeft, 30 => Key::KeyA, 31 => Key::KeyS,
-        32 => Key::KeyD, 33 => Key::KeyF, 34 => Key::KeyG, 35 => Key::KeyH,
-        36 => Key::KeyJ, 37 => Key::KeyK, 38 => Key::KeyL, 39 => Key::SemiColon,
-        40 => Key::Quote, 41 => Key::BackQuote, 42 => Key::ShiftLeft, 43 => Key::BackSlash,
-        44 => Key::KeyZ, 45 => Key::KeyX, 46 => Key::KeyC, 47 => Key::KeyV,
-        48 => Key::KeyB, 49 => Key::KeyN, 50 => Key::KeyM, 51 => Key::Comma,
-        52 => Key::Dot, 53 => Key::Slash, 54 => Key::ShiftRight, 56 => Key::Alt,
-        57 => Key::Space, 58 => Key::CapsLock, 59 => Key::F1, 60 => Key::F2,
-        61 => Key::F3, 62 => Key::F4, 63 => Key::F5, 64 => Key::F6,
-        65 => Key::F7, 66 => Key::F8, 67 => Key::F9, 68 => Key::F10,
-        70 => Key::ScrollLock, 87 => Key::F11, 88 => Key::F12,
-        97 => Key::ControlRight, 99 => Key::PrintScreen, 100 => Key::AltGr,
-        102 => Key::Home, 103 => Key::UpArrow, 104 => Key::PageUp,
-        105 => Key::LeftArrow, 106 => Key::RightArrow, 107 => Key::End,
-        108 => Key::DownArrow, 109 => Key::PageDown, 110 => Key::Insert,
-        111 => Key::Delete, 119 => Key::Pause, 125 => Key::MetaLeft,
+        1 => Key::Escape,
+        2 => Key::Num1,
+        3 => Key::Num2,
+        4 => Key::Num3,
+        5 => Key::Num4,
+        6 => Key::Num5,
+        7 => Key::Num6,
+        8 => Key::Num7,
+        9 => Key::Num8,
+        10 => Key::Num9,
+        11 => Key::Num0,
+        12 => Key::Minus,
+        13 => Key::Equal,
+        14 => Key::Backspace,
+        15 => Key::Tab,
+        16 => Key::KeyQ,
+        17 => Key::KeyW,
+        18 => Key::KeyE,
+        19 => Key::KeyR,
+        20 => Key::KeyT,
+        21 => Key::KeyY,
+        22 => Key::KeyU,
+        23 => Key::KeyI,
+        24 => Key::KeyO,
+        25 => Key::KeyP,
+        26 => Key::LeftBracket,
+        27 => Key::RightBracket,
+        28 => Key::Return,
+        29 => Key::ControlLeft,
+        30 => Key::KeyA,
+        31 => Key::KeyS,
+        32 => Key::KeyD,
+        33 => Key::KeyF,
+        34 => Key::KeyG,
+        35 => Key::KeyH,
+        36 => Key::KeyJ,
+        37 => Key::KeyK,
+        38 => Key::KeyL,
+        39 => Key::SemiColon,
+        40 => Key::Quote,
+        41 => Key::BackQuote,
+        42 => Key::ShiftLeft,
+        43 => Key::BackSlash,
+        44 => Key::KeyZ,
+        45 => Key::KeyX,
+        46 => Key::KeyC,
+        47 => Key::KeyV,
+        48 => Key::KeyB,
+        49 => Key::KeyN,
+        50 => Key::KeyM,
+        51 => Key::Comma,
+        52 => Key::Dot,
+        53 => Key::Slash,
+        54 => Key::ShiftRight,
+        56 => Key::Alt,
+        57 => Key::Space,
+        58 => Key::CapsLock,
+        59 => Key::F1,
+        60 => Key::F2,
+        61 => Key::F3,
+        62 => Key::F4,
+        63 => Key::F5,
+        64 => Key::F6,
+        65 => Key::F7,
+        66 => Key::F8,
+        67 => Key::F9,
+        68 => Key::F10,
+        70 => Key::ScrollLock,
+        87 => Key::F11,
+        88 => Key::F12,
+        97 => Key::ControlRight,
+        99 => Key::PrintScreen,
+        100 => Key::AltGr,
+        102 => Key::Home,
+        103 => Key::UpArrow,
+        104 => Key::PageUp,
+        105 => Key::LeftArrow,
+        106 => Key::RightArrow,
+        107 => Key::End,
+        108 => Key::DownArrow,
+        109 => Key::PageDown,
+        110 => Key::Insert,
+        111 => Key::Delete,
+        119 => Key::Pause,
+        125 => Key::MetaLeft,
         126 => Key::MetaRight,
         _ => return None,
     })

@@ -1,5 +1,5 @@
-use crate::config::{Profile, Snippet};
 use super::context::AppContext;
+use crate::config::{Profile, Snippet};
 
 pub fn build_dictation_prompt(
     language: &str,
@@ -59,7 +59,9 @@ pub fn build_voice_edit_prompt(
     let mut prompt = String::new();
     prompt.push_str("Sei in modalità Voice Edit. L'audio allegato contiene esclusivamente l'istruzione vocale dell'utente per modificare il testo selezionato. Applica l'istruzione al testo e restituisci SOLO il testo finale modificato. Non commentare la modifica e non racchiudere il risultato tra virgolette o blocchi markdown.\n");
     if language != "auto" && !language.is_empty() {
-        prompt.push_str(&format!("Lingua preferita del contesto utente: {language}.\n"));
+        prompt.push_str(&format!(
+            "Lingua preferita del contesto utente: {language}.\n"
+        ));
     }
     prompt.push_str("\n<selected_text>\n");
     prompt.push_str(&selected_text);

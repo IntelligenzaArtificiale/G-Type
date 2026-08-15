@@ -224,7 +224,10 @@ fn normalize_config(config: &mut ConfigV2) {
         config.global.default_profile = config.profiles[0].name.clone();
     }
     config.app_bindings.retain(|_, profile_name| {
-        config.profiles.iter().any(|profile| profile.name == *profile_name)
+        config
+            .profiles
+            .iter()
+            .any(|profile| profile.name == *profile_name)
     });
 }
 
