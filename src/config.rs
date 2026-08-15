@@ -20,6 +20,10 @@ pub struct ConfigV2 {
     pub profiles: Vec<Profile>,
     #[serde(default)]
     pub keys: HashMap<String, String>,
+    #[serde(default)]
+    pub app_bindings: HashMap<String, String>,
+    #[serde(default)]
+    pub snippets: Vec<Snippet>,
 }
 
 impl Default for ConfigV2 {
@@ -28,6 +32,8 @@ impl Default for ConfigV2 {
             global: Default::default(),
             profiles: vec![Profile::default()],
             keys: HashMap::new(),
+            app_bindings: HashMap::new(),
+            snippets: Vec::new(),
         }
     }
 }
@@ -43,6 +49,12 @@ pub struct GlobalConfig {
     #[serde(default = "default_tray_enabled")]
     pub tray_enabled: bool,
     pub audio_device: Option<String>,
+    #[serde(default = "default_profile_name")]
+    pub default_profile: String,
+    #[serde(default = "default_hands_free_hotkey")]
+    pub hands_free_hotkey: String,
+    #[serde(default = "default_voice_edit_hotkey")]
+    pub voice_edit_hotkey: String,
 }
 
 impl Default for GlobalConfig {
@@ -53,6 +65,9 @@ impl Default for GlobalConfig {
             sound_enabled: default_sound_enabled(),
             tray_enabled: default_tray_enabled(),
             audio_device: None,
+            default_profile: default_profile_name(),
+            hands_free_hotkey: default_hands_free_hotkey(),
+            voice_edit_hotkey: default_voice_edit_hotkey(),
         }
     }
 }
@@ -74,7 +89,7 @@ pub struct Profile {
 impl Default for Profile {
     fn default() -> Self {
         Self {
-            name: "dictation".to_string(),
+            name: default_profile_name(),
             hotkey: default_hotkey(),
             provider: "gemini".to_string(),
             model: default_model(),
@@ -83,6 +98,14 @@ impl Default for Profile {
             custom_prompt: None,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct Snippet {
+    pub trigger: String,
+    pub value: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -105,6 +128,15 @@ fn default_model() -> String {
 fn default_hotkey() -> String {
     "ctrl+shift+space".into()
 }
+fn default_hands_free_hotkey() -> String {
+    "ctrl+shift+h".into()
+}
+fn default_voice_edit_hotkey() -> String {
+    "ctrl+shift+e".into()
+}
+fn default_profile_name() -> String {
+    "dictation".into()
+}
 fn default_timeout_secs() -> u64 {
     10
 }
@@ -119,6 +151,9 @@ fn default_tray_enabled() -> bool {
 }
 fn default_currency() -> String {
     "USD".into()
+}
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -148,9 +183,6 @@ pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
 
-/// Returns true once for every successful config save. This lets the runtime
-/// refresh hotkeys only after a real configuration change instead of polling
-/// and locking the full configuration on a timer.
 pub fn take_runtime_dirty() -> bool {
     CONFIG_DIRTY.swap(false, Ordering::AcqRel)
 }
@@ -160,7 +192,8 @@ fn backup_path(path: &Path) -> PathBuf {
 }
 
 fn parse_config(raw: &str) -> Result<ConfigV2> {
-    if let Ok(v2) = toml::from_str::<ConfigV2>(raw) {
+    if let Ok(mut v2) = toml::from_str::<ConfigV2>(raw) {
+        normalize_config(&mut v2);
         return Ok(v2);
     }
 
@@ -175,7 +208,24 @@ fn parse_config(raw: &str) -> Result<ConfigV2> {
     v2.profiles[0].hotkey = v1.hotkey;
     v2.profiles[0].model = v1.model;
     v2.profiles[0].timeout_secs = v1.timeout_secs;
+    normalize_config(&mut v2);
     Ok(v2)
+}
+
+fn normalize_config(config: &mut ConfigV2) {
+    if config.profiles.is_empty() {
+        config.profiles.push(Profile::default());
+    }
+    if !config
+        .profiles
+        .iter()
+        .any(|profile| profile.name == config.global.default_profile)
+    {
+        config.global.default_profile = config.profiles[0].name.clone();
+    }
+    config.app_bindings.retain(|_, profile_name| {
+        config.profiles.iter().any(|profile| profile.name == *profile_name)
+    });
 }
 
 pub fn load() -> Result<ConfigV2> {
@@ -329,10 +379,7 @@ pub fn transcription_prompt(language: &str) -> String {
         }
     };
     format!(
-        "Trascrivi esattamente ciò che viene detto in questo audio, parola per parola. \
-         Non aggiungere commenti, non rispondere a domande, non inventare punteggiatura. \
-         Restituisci SOLO il testo dettato. Se l'audio è silenzioso o incomprensibile, \
-         rispondi con una stringa vuota.{lang_instruction}"
+        "Trascrivi fedelmente ciò che viene detto in questo audio. Non aggiungere commenti e non rispondere alle domande. Se l'utente corregge esplicitamente una parte appena detta con espressioni come 'anzi', 'no scusa', 'correggo' o 'volevo dire', mantieni soltanto la versione finale corretta. Non effettuare altre riscritture o cambiamenti di stile. Restituisci SOLO il testo finale. Se l'audio è silenzioso o incomprensibile, rispondi con una stringa vuota.{lang_instruction}"
     )
 }
 
@@ -375,5 +422,28 @@ mod tests {
         CONFIG_DIRTY.store(true, Ordering::Release);
         assert!(take_runtime_dirty());
         assert!(!take_runtime_dirty());
+    }
+
+    #[test]
+    fn old_config_defaults_new_voice_features() {
+        let raw = r#"
+[global]
+language = "it"
+currency = "EUR"
+sound_enabled = true
+tray_enabled = true
+
+[[profiles]]
+name = "dictation"
+hotkey = "ctrl+shift+space"
+provider = "gemini"
+model = "models/gemini-3.5-flash-lite"
+timeout_secs = 10
+"#;
+        let parsed = toml::from_str::<ConfigV2>(raw).unwrap();
+        assert_eq!(parsed.global.default_profile, "dictation");
+        assert_eq!(parsed.global.hands_free_hotkey, "ctrl+shift+h");
+        assert!(parsed.app_bindings.is_empty());
+        assert!(parsed.snippets.is_empty());
     }
 }
