@@ -38,7 +38,8 @@ impl ModelSpec {
         if high {
             (
                 self.high_input_text_per_m.unwrap_or(self.input_text_per_m),
-                self.high_input_audio_per_m.unwrap_or(self.input_audio_per_m),
+                self.high_input_audio_per_m
+                    .unwrap_or(self.input_audio_per_m),
                 self.high_output_per_m.unwrap_or(self.output_per_m),
             )
         } else {
