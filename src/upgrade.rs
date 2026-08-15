@@ -270,7 +270,8 @@ pub fn run_upgrade() -> Result<()> {
     if let Err(error) = fs::rename(&tmp_path, &current_path) {
         let _ = fs::rename(&bak_path, &current_path);
         let _ = fs::remove_file(&tmp_path);
-        return Err(error).context("Failed to install new binary (rolled back to previous version)");
+        return Err(error)
+            .context("Failed to install new binary (rolled back to previous version)");
     }
 
     let _ = fs::remove_file(&bak_path);

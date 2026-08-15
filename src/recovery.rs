@@ -1,7 +1,5 @@
 // recovery.rs — Durable spool for recordings that must survive provider failures.
 // Each stopped recording is persisted as a WAV before any network request.
-// On successful transcription the spool entry is removed; otherwise it remains
-// available for manual retry from the local dashboard.
 
 use anyhow::{bail, Context, Result};
 use directories::ProjectDirs;
@@ -21,40 +19,44 @@ pub struct RecoveryItem {
     pub attempts: u32,
     #[serde(default)]
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_context: Option<super::context::AppContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_text: Option<String>,
 }
 
 fn data_dir() -> Result<PathBuf> {
-    let proj = ProjectDirs::from("", "", "g-type")
-        .context("Cannot determine G-Type data directory")?;
+    let proj =
+        ProjectDirs::from("", "", "g-type").context("Cannot determine G-Type data directory")?;
     Ok(proj.data_dir().join("recovery"))
 }
-
 fn wav_path(id: &str) -> Result<PathBuf> {
     Ok(data_dir()?.join(format!("{id}.wav")))
 }
-
 fn meta_path(id: &str) -> Result<PathBuf> {
     Ok(data_dir()?.join(format!("{id}.json")))
 }
 
-pub fn persist(
+pub fn persist_with_context(
     samples: &[i16],
     profile: &str,
     model: &str,
     language: &str,
+    app_context: Option<&super::context::AppContext>,
+    operation: Option<&str>,
+    selected_text: Option<&str>,
 ) -> Result<RecoveryItem> {
     if samples.is_empty() {
         bail!("Cannot persist empty audio");
     }
-
     let dir = data_dir()?;
     fs::create_dir_all(&dir)
         .with_context(|| format!("Cannot create recovery directory {}", dir.display()))?;
-
     let id = make_id();
     let wav = crate::providers::gemini::encode_wav(samples);
     atomic_write(&wav_path(&id)?, &wav)?;
-
     let item = RecoveryItem {
         id: id.clone(),
         created_at: now_utc(),
@@ -64,6 +66,9 @@ pub fn persist(
         duration_secs: samples.len() as f64 / 16_000.0,
         attempts: 0,
         last_error: None,
+        app_context: app_context.cloned(),
+        operation: operation.map(str::to_string),
+        selected_text: selected_text.map(|text| text.chars().take(20_000).collect()),
     };
     save_item(&item)?;
     Ok(item)
@@ -74,7 +79,6 @@ pub fn list() -> Result<Vec<RecoveryItem>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
-
     let mut items = Vec::new();
     for entry in fs::read_dir(&dir)
         .with_context(|| format!("Cannot read recovery directory {}", dir.display()))?
@@ -92,29 +96,26 @@ pub fn list() -> Result<Vec<RecoveryItem>> {
             Some(_) => {
                 let _ = fs::remove_file(&path);
             }
-            None => tracing::warn!(path = %path.display(), "Skipping unreadable recovery metadata"),
+            None => tracing::warn!(path=%path.display(),"Skipping unreadable recovery metadata"),
         }
     }
-
     items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(items)
 }
 
 pub fn load(id: &str) -> Result<(RecoveryItem, Vec<i16>)> {
     let item = load_item(id)?;
-    let wav = fs::read(wav_path(id)?)
-        .with_context(|| format!("Cannot read recovery WAV for {id}"))?;
+    let wav =
+        fs::read(wav_path(id)?).with_context(|| format!("Cannot read recovery WAV for {id}"))?;
     let samples = decode_pcm16_mono_wav(&wav)?;
     Ok((item, samples))
 }
-
 pub fn mark_failure(id: &str, error: &str) -> Result<()> {
     let mut item = load_item(id)?;
     item.attempts = item.attempts.saturating_add(1);
     item.last_error = Some(error.chars().take(500).collect());
     save_item(&item)
 }
-
 pub fn remove(id: &str) -> Result<()> {
     validate_id(id)?;
     let wav = wav_path(id)?;
@@ -129,7 +130,6 @@ pub fn remove(id: &str) -> Result<()> {
     }
     Ok(())
 }
-
 pub fn open_audio(id: &str) -> Result<()> {
     validate_id(id)?;
     let path = wav_path(id)?;
@@ -139,7 +139,6 @@ pub fn open_audio(id: &str) -> Result<()> {
     open::that(&path).context("Cannot open recovery audio")?;
     Ok(())
 }
-
 fn load_item(id: &str) -> Result<RecoveryItem> {
     validate_id(id)?;
     let meta = meta_path(id)?;
@@ -148,12 +147,10 @@ fn load_item(id: &str) -> Result<RecoveryItem> {
     serde_json::from_str(&raw)
         .with_context(|| format!("Invalid recovery metadata {}", meta.display()))
 }
-
 fn save_item(item: &RecoveryItem) -> Result<()> {
     let content = serde_json::to_vec_pretty(item).context("Cannot serialize recovery metadata")?;
     atomic_write(&meta_path(&item.id)?, &content)
 }
-
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -175,12 +172,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     replace_file(&tmp, path)?;
     Ok(())
 }
-
 #[cfg(unix)]
 fn replace_file(tmp: &Path, destination: &Path) -> std::io::Result<()> {
     fs::rename(tmp, destination)
 }
-
 #[cfg(not(unix))]
 fn replace_file(tmp: &Path, destination: &Path) -> std::io::Result<()> {
     if destination.exists() {
@@ -188,35 +183,35 @@ fn replace_file(tmp: &Path, destination: &Path) -> std::io::Result<()> {
     }
     fs::rename(tmp, destination)
 }
-
 fn validate_id(id: &str) -> Result<()> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         bail!("Invalid recovery id");
     }
     Ok(())
 }
-
 fn make_id() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}-{}", now.as_secs(), now.subsec_nanos())
 }
-
 fn now_utc() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = now.as_secs();
     let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
+    let tod = secs % 86400;
+    let hours = tod / 3600;
+    let minutes = (tod % 3600) / 60;
+    let seconds = tod % 60;
     let (year, month, day) = days_to_ymd(days);
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
-
 fn days_to_ymd(days: u64) -> (i32, u32, u32) {
     let z = days as i64 + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
@@ -230,7 +225,6 @@ fn days_to_ymd(days: u64) -> (i32, u32, u32) {
     let year = if m <= 2 { y + 1 } else { y };
     (year as i32, m, d)
 }
-
 fn decode_pcm16_mono_wav(bytes: &[u8]) -> Result<Vec<i16>> {
     if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         bail!("Invalid recovery WAV header");
@@ -241,7 +235,6 @@ fn decode_pcm16_mono_wav(bytes: &[u8]) -> Result<Vec<i16>> {
     if channels != 1 || bits != 16 || sample_rate != 16_000 {
         bail!("Unsupported recovery WAV format");
     }
-
     let mut offset = 12usize;
     let mut data = None;
     while offset + 8 <= bytes.len() {
@@ -263,31 +256,35 @@ fn decode_pcm16_mono_wav(bytes: &[u8]) -> Result<Vec<i16>> {
         }
         offset = end + (len % 2);
     }
-
     let data = data.context("Recovery WAV has no data chunk")?;
     if data.len() % 2 != 0 {
         bail!("Recovery WAV contains incomplete PCM sample");
     }
     Ok(data
         .chunks_exact(2)
-        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+        .map(|c| i16::from_le_bytes([c[0], c[1]]))
         .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn wav_roundtrip() {
         let samples = vec![0, 100, -100, i16::MAX, i16::MIN];
         let wav = crate::providers::gemini::encode_wav(&samples);
         assert_eq!(decode_pcm16_mono_wav(&wav).unwrap(), samples);
     }
-
     #[test]
     fn reject_bad_id() {
         assert!(validate_id("../oops").is_err());
         assert!(validate_id("ok-123").is_ok());
+    }
+    #[test]
+    fn old_metadata_is_compatible() {
+        let raw = r#"{"id":"ok-123","created_at":"2026-01-01T00:00:00Z","profile":"dictation","model":"models/gemini-3.5-flash-lite","language":"it","duration_secs":1.0,"attempts":0}"#;
+        let item: RecoveryItem = serde_json::from_str(raw).unwrap();
+        assert!(item.app_context.is_none());
+        assert!(item.operation.is_none());
     }
 }

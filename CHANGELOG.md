@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.5.0 — 2026-08-15
+
+- Adds best-effort Context Awareness at recording start on Windows, macOS and Linux X11/XWayland, while keeping dictation functional when native Wayland does not expose foreground-app metadata.
+- Unifies Profiles and Templates in the dashboard as Modalità/Modes, preserving the existing configuration model while adding application-to-Mode bindings with deterministic explicit-hotkey precedence.
+- Adds Hands-Free dictation with a configurable toggle hotkey and keeps it on the same recording, Recovery, fallback, history and cost-tracking pipeline as normal push-to-talk.
+- Adds Voice Edit: select text, hold the edit hotkey, dictate an instruction and release; G-Type captures the selection after key release, sends one contextual Gemini request and refuses final injection if focus moved to a different application.
+- Adds local voice snippets with bounded trigger/value sizes, prompt context and deterministic post-transcription replacement where safe.
+- Adds explicit backtrack/correction guidance to transcription prompts without introducing a separate AI classifier or hidden mode-selection logic.
+- Extends local history with Mode, application context and operation metadata, while keeping older JSON-lines records readable through serde defaults.
+- Extends Recovery metadata with application context, operation and Voice Edit source text so failed operations remain reconstructable without injecting recovered results into an arbitrary later-focused window.
+- Adds live dashboard management for default Mode, Hands-Free/Voice Edit hotkeys, observed applications, app bindings and snippets; all hotkey collisions are validated before persistence.
+- Logs successful Gemini fallback use explicitly and removes obsolete internal compatibility wrappers that were no longer called.
+- Keeps the dashboard local-only on 127.0.0.1 and retains the existing crash-safe configuration, provider fallback and rollback-safe self-update behavior.
+- Validates Linux with tests and strict Clippy, and compiles the supported release matrix for Windows x86_64, macOS Intel, macOS Apple Silicon and Linux x86_64 through GitHub Actions.
+
 ## v1.4.9 — 2026-08-14
 
 - Reorganizes the dashboard Settings page into five focused tabs: General, Profiles, Templates, API and System, without changing the underlying configuration model or adding new services.

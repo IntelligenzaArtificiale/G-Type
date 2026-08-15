@@ -223,8 +223,8 @@ fn classify_reqwest_error(error: reqwest::Error) -> GeminiError {
 }
 
 fn adaptive_timeout_secs(configured_timeout_secs: u64, duration_secs: f64) -> u64 {
-    let duration_budget = ADAPTIVE_BASE_TIMEOUT_SECS
-        .saturating_add((duration_secs.max(0.0) * 0.25).ceil() as u64);
+    let duration_budget =
+        ADAPTIVE_BASE_TIMEOUT_SECS.saturating_add((duration_secs.max(0.0) * 0.25).ceil() as u64);
     configured_timeout_secs
         .max(duration_budget)
         .clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS)
@@ -249,8 +249,8 @@ fn build_request_body(
     // Starting with Gemini 3.6/3.5, temperature/top_p/top_k are deprecated.
     // For transcription we intentionally request the lowest supported Gemini 3
     // thinking level to reduce latency and billable thought tokens.
-    if let Some(level) = crate::providers::model_catalog::find(model)
-        .and_then(|spec| spec.thinking_level)
+    if let Some(level) =
+        crate::providers::model_catalog::find(model).and_then(|spec| spec.thinking_level)
     {
         generation_config["thinkingConfig"] = json!({"thinkingLevel": level});
     }

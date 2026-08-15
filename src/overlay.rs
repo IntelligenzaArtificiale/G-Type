@@ -3,11 +3,11 @@
 // opacity tricks, no compositor/transparency requirement. Works on any
 // X11 or Wayland setup without a compositor.
 
+use crate::ui_bridge::UiCommand;
 use anyhow::Result;
-use wry::{WebViewBuilder, WebView};
 use std::sync::mpsc::Sender;
 use winit::window::Window;
-use crate::ui_bridge::UiCommand;
+use wry::{WebView, WebViewBuilder};
 
 // Pill HTML — solid dark background, no transparency.
 // Window itself is hidden when idle; shown on recording/processing.
@@ -104,7 +104,7 @@ impl OverlayManager {
         // Position at top-center of the current monitor.
         if let Some(monitor) = window.current_monitor() {
             let screen = monitor.size();
-            let scale  = monitor.scale_factor();
+            let scale = monitor.scale_factor();
             let pill_w = 320.0_f64;
             let x = (screen.width as f64 / scale - pill_w) / 2.0;
             window.set_outer_position(winit::dpi::LogicalPosition::new(x, 24.0));
@@ -116,21 +116,27 @@ impl OverlayManager {
         let _ = window.set_cursor_hittest(false);
 
         // No transparency required — solid background avoids compositor issues.
-        let webview = WebViewBuilder::new()
-            .with_html(PILL_HTML)
-            .build(&window)?;
+        let webview = WebViewBuilder::new().with_html(PILL_HTML).build(&window)?;
 
-        Ok(Self { window, webview, ui_tx })
+        Ok(Self {
+            window,
+            webview,
+            ui_tx,
+        })
     }
 
     pub fn set_recording(&self) -> Result<()> {
-        let _ = self.webview.evaluate_script("window.set_state('recording')");
+        let _ = self
+            .webview
+            .evaluate_script("window.set_state('recording')");
         self.window.set_visible(true);
         Ok(())
     }
 
     pub fn set_processing(&self) -> Result<()> {
-        let _ = self.webview.evaluate_script("window.set_state('processing')");
+        let _ = self
+            .webview
+            .evaluate_script("window.set_state('processing')");
         self.window.set_visible(true);
         Ok(())
     }

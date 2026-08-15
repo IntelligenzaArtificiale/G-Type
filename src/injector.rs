@@ -118,7 +118,8 @@ fn paste_shortcut() -> Result<()> {
     let release_result = enigo.key(modifier, Direction::Release);
 
     click_result.map_err(|error| anyhow::anyhow!("Failed to press paste key: {:?}", error))?;
-    release_result.map_err(|error| anyhow::anyhow!("Failed to release paste modifier: {:?}", error))?;
+    release_result
+        .map_err(|error| anyhow::anyhow!("Failed to release paste modifier: {:?}", error))?;
 
     debug!("Paste shortcut sent");
     Ok(())
@@ -133,6 +134,8 @@ mod tests {
         assert!(!should_use_clipboard("hello world"));
         assert!(should_use_clipboard("ciao è già pronto"));
         assert!(should_use_clipboard("prima riga\nseconda riga"));
-        assert!(should_use_clipboard(&"a".repeat(LONG_TEXT_THRESHOLD_CHARS + 1)));
+        assert!(should_use_clipboard(
+            &"a".repeat(LONG_TEXT_THRESHOLD_CHARS + 1)
+        ));
     }
 }

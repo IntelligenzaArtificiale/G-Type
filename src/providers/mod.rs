@@ -93,11 +93,19 @@ pub async fn transcribe_exact(
     })
 }
 
-/// Normal dictation path: use the configured model first. Only transient
-/// failures (429, 5xx, timeout/network) may move to up to two inexpensive,
-/// stable Flash-Lite fallbacks. Auth, bad request and configuration errors stop
-/// immediately. A profile left on a retired model by an older G-Type release is
-/// migrated in-memory to the current recommended model rather than failing.
+pub async fn transcribe_exact_prompt(
+    profile: &Profile,
+    keys: &HashMap<String, String>,
+    model: &str,
+    audio: &[i16],
+    language: &str,
+    prompt: &str,
+) -> Result<TranscriptionOutcome, gemini::GeminiError> {
+    let mut request_profile = profile.clone();
+    request_profile.custom_prompt = Some(prompt.to_string());
+    transcribe_exact(&request_profile, keys, model, audio, language).await
+}
+
 pub async fn transcribe_with_fallback(
     profile: &Profile,
     keys: &HashMap<String, String>,
@@ -109,11 +117,8 @@ pub async fn transcribe_with_fallback(
         configured.clone()
     } else {
         let recommended = model_catalog::normalize_model_id(model_catalog::recommended_model());
-        tracing::warn!(
-            configured_model = %configured,
-            replacement = %recommended,
-            "Configured Gemini model is retired/unsupported; using current recommended model"
-        );
+        tracing::warn!(configured_model = %configured, replacement = %recommended,
+            "Configured Gemini model is retired/unsupported; using current recommended model");
         recommended.to_string()
     };
 
@@ -127,23 +132,12 @@ pub async fn transcribe_with_fallback(
     let mut last_error: Option<gemini::GeminiError> = None;
     for (index, model) in candidates.iter().enumerate() {
         if index > 0 {
-            tracing::warn!(
-                primary = %primary,
-                fallback = %model,
-                "Transient Gemini failure: trying fallback transcription model"
-            );
+            tracing::warn!(primary = %primary, fallback = %model,
+                "Transient Gemini failure: trying fallback transcription model");
         }
-
         let provider = create_provider_for_model(profile, keys, model)?;
         match provider.transcribe(audio, language).await {
             Ok((text, usage)) => {
-                if index > 0 {
-                    tracing::info!(
-                        primary = %primary,
-                        model_used = %model,
-                        "Transcription recovered through fallback model"
-                    );
-                }
                 return Ok(TranscriptionOutcome {
                     text,
                     usage,
@@ -164,6 +158,18 @@ pub async fn transcribe_with_fallback(
     }))
 }
 
+pub async fn transcribe_with_fallback_prompt(
+    profile: &Profile,
+    keys: &HashMap<String, String>,
+    audio: &[i16],
+    language: &str,
+    prompt: &str,
+) -> Result<TranscriptionOutcome, gemini::GeminiError> {
+    let mut request_profile = profile.clone();
+    request_profile.custom_prompt = Some(prompt.to_string());
+    transcribe_with_fallback(&request_profile, keys, audio, language).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +182,14 @@ mod tests {
         };
         let keys = HashMap::new();
         assert!(create_provider_for_model(&profile, &keys, &profile.model).is_err());
+    }
+
+    #[test]
+    fn prompt_override_is_isolated_to_request_clone() {
+        let profile = Profile::default();
+        let mut request = profile.clone();
+        request.custom_prompt = Some("custom".into());
+        assert!(profile.custom_prompt.is_none());
+        assert_eq!(request.custom_prompt.as_deref(), Some("custom"));
     }
 }

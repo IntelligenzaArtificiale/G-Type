@@ -1,10 +1,10 @@
 [package]
 name = "g-type"
-version = "1.4.9"
+version = "1.5.0"
 edition = "2021"
-description = "Global walkie-talkie dictation daemon powered by Gemini REST API"
+description = "Local-first context-aware voice input powered by Gemini"
 license = "MIT"
-repository = "https://github.com/IntelligenzaArtificiale/g-type"
+repository = "https://github.com/IntelligenzaArtificiale/G-Type"
 readme = "README.md"
 
 [[bin]]
@@ -12,40 +12,19 @@ name = "g-type"
 path = "src/main.rs"
 
 [dependencies]
-# Async runtime
 tokio = { version = "1", features = ["full"] }
-
-# HTTP client for Gemini REST API
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
-
-# Audio capture
 cpal = "0.15"
-
-# Global keyboard hooks
 rdev = "0.5"
-
-# Text injection (keystroke emulation)
 enigo = { version = "0.2", features = ["serde"] }
-
-# Low-level libc (stderr redirect for ALSA noise suppression)
 libc = "0.2"
-
-# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-
-# Error handling
 anyhow = "1"
-
-# Logging / Telemetry
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Base64 encoding for audio chunks
 base64 = "0.22"
-
-# Config directory resolution
 directories = "5"
 arboard = "3.6.1"
 rodio = "0.20.1"
@@ -66,8 +45,6 @@ wry = "0.46"
 winit = "0.30"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# GTK is only used by the Linux tray/event-loop integration. Keeping it target
-# specific prevents macOS/Windows release jobs from requiring GTK system libs.
 gtk = "0.18"
 
 [profile.release]
@@ -75,5 +52,3 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
-# panic = "abort" rimosso: il GUI thread usa catch_unwind per sopravvivere a
-# crash di wry/tray-icon senza abbattere il daemon HTTP + FSM sottostante.

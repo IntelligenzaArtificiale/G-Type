@@ -183,7 +183,10 @@ fn main() -> Result<()> {
         .compact()
         .init();
 
-    info!(version = env!("CARGO_PKG_VERSION"), "G-Type daemon starting");
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "G-Type daemon starting"
+    );
 
     let mut cfg = match config::load() {
         Ok(c) => c,
@@ -291,16 +294,23 @@ fn main() -> Result<()> {
     let (ui_tx, ui_rx) = std::sync::mpsc::channel::<ui_bridge::UiCommand>();
 
     use winit::event_loop::ControlFlow;
-    let event_loop = match winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>::with_user_event().build() {
-        Ok(el) => el,
-        Err(e) => {
-            warn!("Could not create GUI event loop: {} — daemon runs without overlay/tray", e);
-            let dummy_proxy = winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>
-                ::with_user_event().build().unwrap().create_proxy();
-            let _ = rt.block_on(app::run_with_ui(cfg_shared.clone(), dummy_proxy, ui_rx));
-            return Ok(());
-        }
-    };
+    let event_loop =
+        match winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>::with_user_event().build() {
+            Ok(el) => el,
+            Err(e) => {
+                warn!(
+                    "Could not create GUI event loop: {} — daemon runs without overlay/tray",
+                    e
+                );
+                let dummy_proxy =
+                    winit::event_loop::EventLoop::<ui_bridge::DaemonEvent>::with_user_event()
+                        .build()
+                        .unwrap()
+                        .create_proxy();
+                let _ = rt.block_on(app::run_with_ui(cfg_shared.clone(), dummy_proxy, ui_rx));
+                return Ok(());
+            }
+        };
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let ui_proxy = event_loop.create_proxy();
@@ -357,18 +367,21 @@ fn main() -> Result<()> {
                             .with_resizable(false)
                             .with_visible(false);
                         match elwt.create_window(attrs) {
-                            Ok(window) => match overlay::OverlayManager::new(window, ui_tx_gui.clone()) {
-                                Ok(om) => {
-                                    info!("Overlay initialized");
-                                    overlay_mgr = Some(om);
+                            Ok(window) => {
+                                match overlay::OverlayManager::new(window, ui_tx_gui.clone()) {
+                                    Ok(om) => {
+                                        info!("Overlay initialized");
+                                        overlay_mgr = Some(om);
+                                    }
+                                    Err(e) => error!("OverlayManager init failed: {}", e),
                                 }
-                                Err(e) => error!("OverlayManager init failed: {}", e),
-                            },
+                            }
                             Err(e) => error!("Overlay window creation failed: {}", e),
                         }
                     }
                 }
-                Event::AboutToWait => {
+                Event::AboutToWait =>
+                {
                     #[cfg(target_os = "linux")]
                     while gtk::events_pending() {
                         gtk::main_iteration_do(false);
