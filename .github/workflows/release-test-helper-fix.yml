@@ -17,26 +17,33 @@ jobs:
           ref: release-v1.5.0-context-modes-voice-edit
           fetch-depth: 0
 
+      - name: Install Rust formatter
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
       - name: Remove obsolete test helper
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path("src/tracking.rs")
-          text = path.read_text(encoding="utf-8")
-          block = '''    fn usage(prompt: u64, output: u64) -> TokenUsage {
-              TokenUsage {
-                  prompt_tokens: prompt,
-                  candidates_tokens: output,
-                  ..TokenUsage::default()
-              }
-          }
-'''
-          if block not in text:
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          start = next((i for i, line in enumerate(lines) if line.strip().startswith("fn usage(prompt: u64, output: u64)")), None)
+          if start is None:
               raise SystemExit("Expected obsolete tracking test helper not found")
-          path.write_text(text.replace(block, "", 1), encoding="utf-8")
+          depth = 0
+          end = None
+          for i in range(start, len(lines)):
+              depth += lines[i].count("{") - lines[i].count("}")
+              if i > start and depth == 0:
+                  end = i + 1
+                  break
+          if end is None:
+              raise SystemExit("Could not locate end of obsolete tracking test helper")
+          del lines[start:end]
+          path.write_text("".join(lines), encoding="utf-8")
           PY
           cargo fmt -- src/tracking.rs
 
@@ -47,6 +54,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/tracking.rs
-          git diff --cached --quiet && exit 0
+          if git diff --cached --quiet; then
+            echo "No cleanup required."
+            exit 0
+          fi
           git commit -m "fix: remove obsolete tracking test helper"
           git push origin HEAD:release-v1.5.0-context-modes-voice-edit
