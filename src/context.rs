@@ -25,9 +25,8 @@ impl AppContext {
     }
 }
 
-/// Capture the foreground application once, at the beginning of an operation.
-/// Context awareness is deliberately best-effort: failure must never block
-/// dictation, hands-free or Voice Edit.
+/// Capture the foreground application once, at operation start. This is always
+/// best-effort: context failure must never block dictation or editing.
 pub fn capture() -> Option<AppContext> {
     #[cfg(target_os = "windows")]
     let raw = capture_windows();
@@ -88,8 +87,8 @@ fn normalize(
 fn sanitize(value: &str, max_chars: usize) -> String {
     value
         .chars()
-        .filter(|ch| !ch.is_control() || *ch == ' ')
-        .map(|ch| if ch == '\n' || ch == '\r' || ch == '\t' { ' ' } else { ch })
+        .map(|ch| if matches!(ch, '\n' | '\r' | '\t') { ' ' } else { ch })
+        .filter(|ch| !ch.is_control())
         .take(max_chars)
         .collect::<String>()
         .split_whitespace()
@@ -112,11 +111,15 @@ fn slug(value: &str) -> String {
     while out.ends_with('-') {
         out.pop();
     }
-    if out.is_empty() { "unknown".to_string() } else { out }
+    if out.is_empty() {
+        "unknown".to_string()
+    } else {
+        out
+    }
 }
 
-fn browser_family<'a>(app_name: &'a str, identifier: &'a str) -> Option<&'static str> {
-    let value = format!("{} {}", app_name, identifier).to_ascii_lowercase();
+fn browser_family(app_name: &str, identifier: &str) -> Option<&'static str> {
+    let value = format!("{app_name} {identifier}").to_ascii_lowercase();
     if value.contains("chrome") || value.contains("chromium") {
         Some("chrome")
     } else if value.contains("edge") || value.contains("msedge") {
@@ -136,7 +139,7 @@ fn browser_family<'a>(app_name: &'a str, identifier: &'a str) -> Option<&'static
 
 fn infer_browser_surface(title: Option<&str>, _browser: &str) -> Option<&'static str> {
     let title = title?.to_ascii_lowercase();
-    let known = [
+    [
         ("gmail", "Gmail"),
         ("google docs", "Google Docs"),
         ("google sheets", "Google Sheets"),
@@ -152,11 +155,10 @@ fn infer_browser_surface(title: Option<&str>, _browser: &str) -> Option<&'static
         ("youtube", "YouTube"),
         ("google meet", "Google Meet"),
         ("microsoft teams", "Microsoft Teams"),
-    ];
-    known
-        .iter()
-        .find(|(needle, _)| title.contains(needle))
-        .map(|(_, label)| *label)
+    ]
+    .iter()
+    .find(|(needle, _)| title.contains(needle))
+    .map(|(_, label)| *label)
 }
 
 #[cfg(target_os = "windows")]
@@ -195,39 +197,30 @@ Write-Output ($p.ProcessName + "`t" + $identifier + "`t" + $sb.ToString());
 
 #[cfg(target_os = "macos")]
 fn capture_macos() -> Option<(String, String, Option<String>)> {
-    // NSWorkspace.frontmostApplication is the canonical AppKit concept. Using
-    // osascript here avoids another native dependency and remains best-effort;
-    // if window-title access is denied we still return the frontmost app name.
-    let detailed = r#"tell application "System Events"
-set p to first application process whose frontmost is true
-set appName to name of p
-set winTitle to ""
-try
-set winTitle to value of attribute "AXTitle" of window 1 of p
-end try
-return appName & tab & appName & tab & winTitle
-end tell"#;
-    let output = Command::new("osascript").args(["-e", detailed]).output().ok()?;
-    if output.status.success() {
-        if let Some(parsed) = parse_tabbed(&String::from_utf8_lossy(&output.stdout)) {
-            return Some(parsed);
-        }
-    }
-
-    let simple = r#"tell application "System Events" to get name of first application process whose frontmost is true"#;
-    let output = Command::new("osascript").args(["-e", simple]).output().ok()?;
+    // JXA uses AppKit's NSWorkspace.frontmostApplication for app identity and
+    // does not require Accessibility permission merely to know the active app.
+    // Window title stays optional to preserve the best-effort contract.
+    let script = r#"ObjC.import('AppKit');
+var app = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+if (!app) { $.exit(1); }
+var name = ObjC.unwrap(app.localizedName) || '';
+var bundle = ObjC.unwrap(app.bundleIdentifier) || name;
+console.log(name + '\t' + bundle + '\t');"#;
+    let output = Command::new("osascript")
+        .args(["-l", "JavaScript", "-e", script])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!name.is_empty()).then(|| (name.clone(), name, None))
+    parse_tabbed(&String::from_utf8_lossy(&output.stdout))
+        .or_else(|| parse_tabbed(&String::from_utf8_lossy(&output.stderr)))
 }
 
 #[cfg(target_os = "linux")]
 fn capture_linux() -> Option<(String, String, Option<String>)> {
-    // EWMH _NET_ACTIVE_WINDOW is the portable X11/XWayland source. Native
-    // Wayland compositors intentionally may expose no equivalent; in that case
-    // context is simply unavailable and dictation continues normally.
+    // EWMH _NET_ACTIVE_WINDOW covers X11/XWayland. Native Wayland compositors
+    // may intentionally expose no portable equivalent; then context is None.
     let root = Command::new("xprop")
         .args(["-root", "_NET_ACTIVE_WINDOW"])
         .output()
