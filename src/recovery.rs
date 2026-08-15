@@ -1,7 +1,5 @@
 // recovery.rs — Durable spool for recordings that must survive provider failures.
 // Each stopped recording is persisted as a WAV before any network request.
-// On successful transcription the spool entry is removed; otherwise it remains
-// available for manual retry from the local dashboard.
 
 use anyhow::{bail, Context, Result};
 use directories::ProjectDirs;
@@ -21,6 +19,12 @@ pub struct RecoveryItem {
     pub attempts: u32,
     #[serde(default)]
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_context: Option<crate::context::AppContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_text: Option<String>,
 }
 
 fn data_dir() -> Result<PathBuf> {
@@ -43,6 +47,18 @@ pub fn persist(
     model: &str,
     language: &str,
 ) -> Result<RecoveryItem> {
+    persist_with_context(samples, profile, model, language, None, None, None)
+}
+
+pub fn persist_with_context(
+    samples: &[i16],
+    profile: &str,
+    model: &str,
+    language: &str,
+    app_context: Option<&crate::context::AppContext>,
+    operation: Option<&str>,
+    selected_text: Option<&str>,
+) -> Result<RecoveryItem> {
     if samples.is_empty() {
         bail!("Cannot persist empty audio");
     }
@@ -64,6 +80,9 @@ pub fn persist(
         duration_secs: samples.len() as f64 / 16_000.0,
         attempts: 0,
         last_error: None,
+        app_context: app_context.cloned(),
+        operation: operation.map(str::to_string),
+        selected_text: selected_text.map(|text| text.chars().take(20_000).collect()),
     };
     save_item(&item)?;
     Ok(item)
@@ -289,5 +308,14 @@ mod tests {
     fn reject_bad_id() {
         assert!(validate_id("../oops").is_err());
         assert!(validate_id("ok-123").is_ok());
+    }
+
+    #[test]
+    fn old_recovery_metadata_is_backward_compatible() {
+        let raw = r#"{"id":"ok-123","created_at":"2026-01-01T00:00:00Z","profile":"dictation","model":"models/gemini-3.5-flash-lite","language":"it","duration_secs":1.0,"attempts":0}"#;
+        let item: RecoveryItem = serde_json::from_str(raw).unwrap();
+        assert!(item.app_context.is_none());
+        assert!(item.operation.is_none());
+        assert!(item.selected_text.is_none());
     }
 }
