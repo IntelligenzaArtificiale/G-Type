@@ -375,13 +375,6 @@ fn estimated_time_saved(record: &TranscriptionRecord) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn usage(prompt: u64, output: u64) -> TokenUsage {
-        TokenUsage {
-            prompt_tokens: prompt,
-            candidates_tokens: output,
-            ..TokenUsage::default()
-        }
-    }
     #[test]
     fn modality_cost_is_exact_when_details_are_present() {
         let usage = TokenUsage {
