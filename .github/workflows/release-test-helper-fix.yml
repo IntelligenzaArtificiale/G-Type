@@ -1,0 +1,52 @@
+name: Release test helper cleanup
+
+on:
+  push:
+    branches:
+      - release-v1.5.0-context-modes-voice-edit
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release-v1.5.0-context-modes-voice-edit
+          fetch-depth: 0
+
+      - name: Remove obsolete test helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/tracking.rs")
+          text = path.read_text(encoding="utf-8")
+          block = '''    fn usage(prompt: u64, output: u64) -> TokenUsage {
+              TokenUsage {
+                  prompt_tokens: prompt,
+                  candidates_tokens: output,
+                  ..TokenUsage::default()
+              }
+          }
+'''
+          if block not in text:
+              raise SystemExit("Expected obsolete tracking test helper not found")
+          path.write_text(text.replace(block, "", 1), encoding="utf-8")
+          PY
+          cargo fmt -- src/tracking.rs
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/tracking.rs
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: remove obsolete tracking test helper"
+          git push origin HEAD:release-v1.5.0-context-modes-voice-edit
