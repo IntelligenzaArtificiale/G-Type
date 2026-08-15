@@ -11,8 +11,7 @@ use tracing::{error, info, warn};
 pub enum InputSignal {
     StartProfile(String),
     StopProfile,
-    StartHandsFree,
-    StopHandsFree,
+    ToggleHandsFree,
     StartVoiceEdit,
     StopVoiceEdit,
 }
@@ -115,54 +114,19 @@ pub fn parse_hotkey(raw: &str) -> Result<Hotkey> {
 
 fn str_to_key(name: &str) -> Result<Key> {
     Ok(match name {
-        "a" => Key::KeyA,
-        "b" => Key::KeyB,
-        "c" => Key::KeyC,
-        "d" => Key::KeyD,
-        "e" => Key::KeyE,
-        "f" => Key::KeyF,
-        "g" => Key::KeyG,
-        "h" => Key::KeyH,
-        "i" => Key::KeyI,
-        "j" => Key::KeyJ,
-        "k" => Key::KeyK,
-        "l" => Key::KeyL,
-        "m" => Key::KeyM,
-        "n" => Key::KeyN,
-        "o" => Key::KeyO,
-        "p" => Key::KeyP,
-        "q" => Key::KeyQ,
-        "r" => Key::KeyR,
-        "s" => Key::KeyS,
-        "t" => Key::KeyT,
-        "u" => Key::KeyU,
-        "v" => Key::KeyV,
-        "w" => Key::KeyW,
-        "x" => Key::KeyX,
-        "y" => Key::KeyY,
-        "z" => Key::KeyZ,
-        "0" => Key::Num0,
-        "1" => Key::Num1,
-        "2" => Key::Num2,
-        "3" => Key::Num3,
-        "4" => Key::Num4,
-        "5" => Key::Num5,
-        "6" => Key::Num6,
-        "7" => Key::Num7,
-        "8" => Key::Num8,
-        "9" => Key::Num9,
-        "f1" => Key::F1,
-        "f2" => Key::F2,
-        "f3" => Key::F3,
-        "f4" => Key::F4,
-        "f5" => Key::F5,
-        "f6" => Key::F6,
-        "f7" => Key::F7,
-        "f8" => Key::F8,
-        "f9" => Key::F9,
-        "f10" => Key::F10,
-        "f11" => Key::F11,
-        "f12" => Key::F12,
+        "a" => Key::KeyA, "b" => Key::KeyB, "c" => Key::KeyC, "d" => Key::KeyD,
+        "e" => Key::KeyE, "f" => Key::KeyF, "g" => Key::KeyG, "h" => Key::KeyH,
+        "i" => Key::KeyI, "j" => Key::KeyJ, "k" => Key::KeyK, "l" => Key::KeyL,
+        "m" => Key::KeyM, "n" => Key::KeyN, "o" => Key::KeyO, "p" => Key::KeyP,
+        "q" => Key::KeyQ, "r" => Key::KeyR, "s" => Key::KeyS, "t" => Key::KeyT,
+        "u" => Key::KeyU, "v" => Key::KeyV, "w" => Key::KeyW, "x" => Key::KeyX,
+        "y" => Key::KeyY, "z" => Key::KeyZ,
+        "0" => Key::Num0, "1" => Key::Num1, "2" => Key::Num2, "3" => Key::Num3,
+        "4" => Key::Num4, "5" => Key::Num5, "6" => Key::Num6, "7" => Key::Num7,
+        "8" => Key::Num8, "9" => Key::Num9,
+        "f1" => Key::F1, "f2" => Key::F2, "f3" => Key::F3, "f4" => Key::F4,
+        "f5" => Key::F5, "f6" => Key::F6, "f7" => Key::F7, "f8" => Key::F8,
+        "f9" => Key::F9, "f10" => Key::F10, "f11" => Key::F11, "f12" => Key::F12,
         "space" | "spacebar" => Key::Space,
         "enter" | "return" => Key::Return,
         "tab" => Key::Tab,
@@ -207,7 +171,6 @@ struct HookState {
     modifiers: HashSet<Modifier>,
     triggers: HashSet<Key>,
     active_hold: Option<HoldAction>,
-    hands_free_active: bool,
     last_trigger: Instant,
     shared: Arc<SharedHotkeys>,
     tx: InputTx,
@@ -219,7 +182,6 @@ impl HookState {
             modifiers: HashSet::new(),
             triggers: HashSet::new(),
             active_hold: None,
-            hands_free_active: false,
             last_trigger: Instant::now() - std::time::Duration::from_secs(10),
             shared,
             tx,
@@ -282,17 +244,7 @@ impl HookState {
             if self.debounced() {
                 return;
             }
-            self.hands_free_active = !self.hands_free_active;
-            let signal = if self.hands_free_active {
-                InputSignal::StartHandsFree
-            } else {
-                InputSignal::StopHandsFree
-            };
-            let _ = self.tx.blocking_send(signal);
-            return;
-        }
-
-        if self.hands_free_active {
+            let _ = self.tx.blocking_send(InputSignal::ToggleHandsFree);
             return;
         }
 
@@ -519,91 +471,29 @@ fn evdev_loop(
 #[cfg(target_os = "linux")]
 fn linux_keycode(code: u16) -> Option<Key> {
     Some(match code {
-        1 => Key::Escape,
-        2 => Key::Num1,
-        3 => Key::Num2,
-        4 => Key::Num3,
-        5 => Key::Num4,
-        6 => Key::Num5,
-        7 => Key::Num6,
-        8 => Key::Num7,
-        9 => Key::Num8,
-        10 => Key::Num9,
-        11 => Key::Num0,
-        12 => Key::Minus,
-        13 => Key::Equal,
-        14 => Key::Backspace,
-        15 => Key::Tab,
-        16 => Key::KeyQ,
-        17 => Key::KeyW,
-        18 => Key::KeyE,
-        19 => Key::KeyR,
-        20 => Key::KeyT,
-        21 => Key::KeyY,
-        22 => Key::KeyU,
-        23 => Key::KeyI,
-        24 => Key::KeyO,
-        25 => Key::KeyP,
-        26 => Key::LeftBracket,
-        27 => Key::RightBracket,
-        28 => Key::Return,
-        29 => Key::ControlLeft,
-        30 => Key::KeyA,
-        31 => Key::KeyS,
-        32 => Key::KeyD,
-        33 => Key::KeyF,
-        34 => Key::KeyG,
-        35 => Key::KeyH,
-        36 => Key::KeyJ,
-        37 => Key::KeyK,
-        38 => Key::KeyL,
-        39 => Key::SemiColon,
-        40 => Key::Quote,
-        41 => Key::BackQuote,
-        42 => Key::ShiftLeft,
-        43 => Key::BackSlash,
-        44 => Key::KeyZ,
-        45 => Key::KeyX,
-        46 => Key::KeyC,
-        47 => Key::KeyV,
-        48 => Key::KeyB,
-        49 => Key::KeyN,
-        50 => Key::KeyM,
-        51 => Key::Comma,
-        52 => Key::Dot,
-        53 => Key::Slash,
-        54 => Key::ShiftRight,
-        56 => Key::Alt,
-        57 => Key::Space,
-        58 => Key::CapsLock,
-        59 => Key::F1,
-        60 => Key::F2,
-        61 => Key::F3,
-        62 => Key::F4,
-        63 => Key::F5,
-        64 => Key::F6,
-        65 => Key::F7,
-        66 => Key::F8,
-        67 => Key::F9,
-        68 => Key::F10,
-        70 => Key::ScrollLock,
-        87 => Key::F11,
-        88 => Key::F12,
-        97 => Key::ControlRight,
-        99 => Key::PrintScreen,
-        100 => Key::AltGr,
-        102 => Key::Home,
-        103 => Key::UpArrow,
-        104 => Key::PageUp,
-        105 => Key::LeftArrow,
-        106 => Key::RightArrow,
-        107 => Key::End,
-        108 => Key::DownArrow,
-        109 => Key::PageDown,
-        110 => Key::Insert,
-        111 => Key::Delete,
-        119 => Key::Pause,
-        125 => Key::MetaLeft,
+        1 => Key::Escape, 2 => Key::Num1, 3 => Key::Num2, 4 => Key::Num3,
+        5 => Key::Num4, 6 => Key::Num5, 7 => Key::Num6, 8 => Key::Num7,
+        9 => Key::Num8, 10 => Key::Num9, 11 => Key::Num0, 12 => Key::Minus,
+        13 => Key::Equal, 14 => Key::Backspace, 15 => Key::Tab, 16 => Key::KeyQ,
+        17 => Key::KeyW, 18 => Key::KeyE, 19 => Key::KeyR, 20 => Key::KeyT,
+        21 => Key::KeyY, 22 => Key::KeyU, 23 => Key::KeyI, 24 => Key::KeyO,
+        25 => Key::KeyP, 26 => Key::LeftBracket, 27 => Key::RightBracket,
+        28 => Key::Return, 29 => Key::ControlLeft, 30 => Key::KeyA, 31 => Key::KeyS,
+        32 => Key::KeyD, 33 => Key::KeyF, 34 => Key::KeyG, 35 => Key::KeyH,
+        36 => Key::KeyJ, 37 => Key::KeyK, 38 => Key::KeyL, 39 => Key::SemiColon,
+        40 => Key::Quote, 41 => Key::BackQuote, 42 => Key::ShiftLeft, 43 => Key::BackSlash,
+        44 => Key::KeyZ, 45 => Key::KeyX, 46 => Key::KeyC, 47 => Key::KeyV,
+        48 => Key::KeyB, 49 => Key::KeyN, 50 => Key::KeyM, 51 => Key::Comma,
+        52 => Key::Dot, 53 => Key::Slash, 54 => Key::ShiftRight, 56 => Key::Alt,
+        57 => Key::Space, 58 => Key::CapsLock, 59 => Key::F1, 60 => Key::F2,
+        61 => Key::F3, 62 => Key::F4, 63 => Key::F5, 64 => Key::F6,
+        65 => Key::F7, 66 => Key::F8, 67 => Key::F9, 68 => Key::F10,
+        70 => Key::ScrollLock, 87 => Key::F11, 88 => Key::F12,
+        97 => Key::ControlRight, 99 => Key::PrintScreen, 100 => Key::AltGr,
+        102 => Key::Home, 103 => Key::UpArrow, 104 => Key::PageUp,
+        105 => Key::LeftArrow, 106 => Key::RightArrow, 107 => Key::End,
+        108 => Key::DownArrow, 109 => Key::PageDown, 110 => Key::Insert,
+        111 => Key::Delete, 119 => Key::Pause, 125 => Key::MetaLeft,
         126 => Key::MetaRight,
         _ => return None,
     })
@@ -639,14 +529,6 @@ fn find_keyboard_devices() -> Vec<std::path::PathBuf> {
 mod tests {
     use super::*;
 
-    fn hotkeys() -> HotkeySet {
-        HotkeySet {
-            profiles: vec![(parse_hotkey("ctrl+shift+space").unwrap(), "dictation".into())],
-            hands_free: Some(parse_hotkey("ctrl+shift+h").unwrap()),
-            voice_edit: Some(parse_hotkey("ctrl+shift+e").unwrap()),
-        }
-    }
-
     #[test]
     fn parses_voice_controls() {
         assert_eq!(parse_hotkey("ctrl+shift+h").unwrap().trigger, Key::KeyH);
@@ -654,13 +536,13 @@ mod tests {
     }
 
     #[test]
-    fn hands_free_emits_explicit_start_and_stop() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let shared = SharedHotkeys::new(hotkeys());
-        let (tx, mut rx) = mpsc::channel(8);
+    fn hands_free_emits_stateless_toggle() {
+        let shared = SharedHotkeys::new(HotkeySet {
+            profiles: Vec::new(),
+            hands_free: Some(parse_hotkey("ctrl+shift+h").unwrap()),
+            voice_edit: None,
+        });
+        let (tx, mut rx) = mpsc::channel(4);
         let mut state = HookState::new(tx, shared);
         for key in [Key::ControlLeft, Key::ShiftLeft, Key::KeyH] {
             state.handle(&Event {
@@ -669,19 +551,7 @@ mod tests {
                 event_type: EventType::KeyPress(key),
             });
         }
-        assert_eq!(runtime.block_on(rx.recv()), Some(InputSignal::StartHandsFree));
-        state.handle(&Event {
-            time: std::time::SystemTime::now(),
-            name: None,
-            event_type: EventType::KeyRelease(Key::KeyH),
-        });
-        std::thread::sleep(std::time::Duration::from_millis(DEBOUNCE_MS + 5));
-        state.handle(&Event {
-            time: std::time::SystemTime::now(),
-            name: None,
-            event_type: EventType::KeyPress(Key::KeyH),
-        });
-        assert_eq!(runtime.block_on(rx.recv()), Some(InputSignal::StopHandsFree));
+        assert_eq!(rx.try_recv(), Ok(InputSignal::ToggleHandsFree));
     }
 
     #[cfg(target_os = "linux")]
