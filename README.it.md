@@ -1,10 +1,76 @@
 # G-Type
 
-**Input vocale locale, contestuale e globale basato su Google Gemini.**
+<p align="center">
+  <strong>Input vocale locale, contestuale e globale basato su Google Gemini.</strong>
+</p>
 
-G-Type gira in background, registra soltanto quando lo invochi, usa la tua Gemini API key e inserisce il risultato nell'applicazione attiva. La versione 1.5 aggiunge Context Awareness, Modalità, associazioni applicazione→Modalità, snippet vocali, Hands-Free e Voice Edit senza introdurre account G-Type, backend ospitati o database cloud.
+<p align="center">
+  <a href="https://github.com/IntelligenzaArtificiale/G-Type/releases/latest"><img alt="Ultima release" src="https://img.shields.io/github/v/release/IntelligenzaArtificiale/G-Type?display_name=tag&sort=semver"></a>
+  <a href="https://github.com/IntelligenzaArtificiale/G-Type/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/IntelligenzaArtificiale/G-Type/ci.yml?branch=main&label=CI"></a>
+  <a href="LICENSE"><img alt="Licenza MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Dashboard locale" src="https://img.shields.io/badge/dashboard-127.0.0.1%3A9741-6f42c1">
+</p>
 
-[English](README.md)
+<p align="center">
+  <a href="README.md">English</a> •
+  <a href="README.it.md"><b>Italiano</b></a> •
+  <a href="README.es.md">Español</a> •
+  <a href="README.pt-BR.md">Português (BR)</a> •
+  <a href="README.hi.md">हिन्दी</a>
+</p>
+
+G-Type gira in background, registra soltanto quando lo invochi, usa la tua Gemini API key e inserisce il risultato nell'applicazione attiva. **v1.5.0** aggiunge Context Awareness, Modalità, associazioni applicazione→Modalità, snippet vocali, Hands-Free e Voice Edit senza introdurre account G-Type, backend ospitati o database cloud.
+
+<p align="center">
+  <img src="docs/assets/g-type-v1.5-flow.svg" alt="Flusso di elaborazione G-Type v1.5" width="100%">
+</p>
+
+## Avvio rapido
+
+### 1. Installa
+
+Linux e macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.ps1 | iex
+```
+
+### 2. Completa il primo setup
+
+G-Type apre la pagina locale:
+
+```text
+http://127.0.0.1:9741/setup
+```
+
+Inserisci la Gemini API key, scegli un modello compatibile e configura la prima hotkey push-to-talk.
+
+### 3. Inizia a dettare
+
+```bash
+g-type
+```
+
+Tieni premuta la hotkey configurata, parla e rilasciala.
+
+Dashboard:
+
+```text
+http://127.0.0.1:9741/
+```
+
+### 4. Aggiorna in seguito
+
+```bash
+g-type upgrade
+g-type version
+```
 
 ## Funzionalità principali
 
@@ -37,19 +103,9 @@ Le release precompilate vengono prodotte per:
 
 Il rilevamento del contesto è deliberatamente best-effort. Su Windows e macOS utilizza primitive di sistema; su Linux usa le informazioni EWMH disponibili in X11/XWayland. Un compositor Wayland nativo può non esporre l'applicazione attiva: in quel caso G-Type continua normalmente senza contesto.
 
+I binari ufficiali sono pubblicati nelle [GitHub Releases](https://github.com/IntelligenzaArtificiale/G-Type/releases).
+
 ## Installazione
-
-### Linux e macOS
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.sh | bash
-```
-
-### Windows PowerShell
-
-```powershell
-irm https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.ps1 | iex
-```
 
 Gli installer scaricano l'ultima GitHub Release compatibile, installano G-Type per l'utente corrente e lo avviano. L'autoavvio non viene imposto durante l'installazione: puoi abilitarlo successivamente da **Dashboard → Impostazioni → Sistema**.
 
@@ -62,6 +118,12 @@ http://127.0.0.1:9741/setup
 ```
 
 Il setup verifica la Gemini API key, permette di scegliere un modello compatibile e configura la prima hotkey push-to-talk.
+
+Se il setup non si apre automaticamente:
+
+```bash
+g-type setup
+```
 
 ## Uso quotidiano
 
@@ -86,6 +148,8 @@ Ctrl+Shift+E       Voice Edit: tieni premuto mentre parli
 ```
 
 Tutte le hotkey sono modificabili dalla dashboard. G-Type rifiuta collisioni tra hotkey delle Modalità, Hands-Free e Voice Edit.
+
+Se G-Type è avviato in primo piano, fermalo con `Ctrl+C` e riavvialo con `g-type`. Se hai abilitato l'autoavvio, gestiscilo da **Dashboard → Impostazioni → Sistema** invece di creare una seconda voce di avvio manuale.
 
 ## Modalità e associazioni applicative
 
@@ -163,6 +227,8 @@ http://127.0.0.1:9741/recovery
 
 Il Recovery conserva Modalità, contesto applicativo e tipo di operazione; per Voice Edit conserva anche il testo selezionato necessario a rigenerare la modifica. Un recupero manuale salva il risultato in Cronologia ma non lo inietta automaticamente nell'app che potrebbe trovarsi in primo piano molto tempo dopo.
 
+**Non cancellare manualmente la cartella Recovery se contiene registrazioni che ti servono ancora.** Prima prova il recupero dalla pagina dedicata.
+
 ## Dashboard
 
 - **Cronologia** — trascrizioni recenti con ricerca, applicazione/contesto, Modalità, operazione, durata, modello e costo.
@@ -182,20 +248,17 @@ Aggiorna con:
 
 ```bash
 g-type upgrade
-```
-
-Controlla la versione con:
-
-```bash
 g-type version
 ```
 
 L'updater valida il download, sostituisce il binario soltanto dopo un download riuscito e mantiene un percorso di rollback in caso di errore durante la sostituzione.
 
+Se G-Type sta girando in primo piano, il flusso più sicuro è: `Ctrl+C`, `g-type upgrade`, `g-type version`, quindi `g-type` per riavviarlo.
+
 ## Comandi utili
 
 ```text
-g-type                 Avvia il demone
+g-type                 Avvia G-Type
 g-type setup           Apre il setup web
 g-type stats           Mostra statistiche e costi
 g-type upgrade         Aggiorna all'ultima release
@@ -205,6 +268,38 @@ g-type set-key <KEY>   Sostituisce la Gemini API key
 g-type test-audio      Esegue un test del microfono
 g-type list-devices    Elenca i dispositivi di input
 g-type help            Mostra l'help CLI
+```
+
+## Controlli rapidi
+
+Verifica la versione installata:
+
+```bash
+g-type version
+```
+
+Testa il microfono senza fare una normale dettatura:
+
+```bash
+g-type test-audio
+```
+
+Elenca i dispositivi di input:
+
+```bash
+g-type list-devices
+```
+
+Trova il percorso della configurazione attiva:
+
+```bash
+g-type config
+```
+
+Se una registrazione completata fallisce durante l'elaborazione Gemini/rete, apri Recovery prima di cancellare file locali:
+
+```text
+http://127.0.0.1:9741/recovery
 ```
 
 ## Dati e privacy
@@ -229,10 +324,21 @@ Controlli prima di contribuire:
 ```bash
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo test --all-features
 ```
 
 Le release ufficiali vengono compilate da GitHub Actions per tutti i target supportati.
+
+## Changelog e release
+
+- Changelog completo: [CHANGELOG.md](CHANGELOG.md)
+- Binari più recenti e release notes: [GitHub Releases](https://github.com/IntelligenzaArtificiale/G-Type/releases/latest)
+
+## Screenshot
+
+Il README usa per ora un visual tecnico nativo del repository invece di screenshot simulati. Gli screenshot reali della dashboard è meglio catturarli da una build realmente in esecuzione, così la documentazione non mostra mai un mockup diverso dall'interfaccia effettiva.
+
+Gli screenshot possono essere aggiunti in `docs/assets/`. Prima di inserirli nel repository vanno rimossi API key, cronologia privata, email, titoli di finestre sensibili e snippet personali.
 
 ## Licenza
 
