@@ -19,10 +19,10 @@
   <a href="README.hi.md">हिन्दी</a>
 </p>
 
-G-Type gira in background, registra soltanto quando lo invochi, usa la tua Gemini API key e inserisce il risultato nell'applicazione attiva. **v1.5.0** aggiunge Context Awareness, Modalità, associazioni applicazione→Modalità, snippet vocali, Hands-Free e Voice Edit senza introdurre account G-Type, backend ospitati o database cloud.
+G-Type gira in background, registra soltanto quando lo invochi, usa la tua Gemini API key e inserisce il risultato nell'applicazione attiva. **v1.6.0** introduce un redesign completo e premium di Dashboard, Cronologia, Statistiche, Impostazioni, Recovery e onboarding, mantenendo intatte le funzionalità v1.5: Context Awareness, Modalità, associazioni applicazione→Modalità, snippet vocali, Hands-Free e Voice Edit.
 
 <p align="center">
-  <img src="docs/assets/g-type-v1.5-flow.svg" alt="Flusso di elaborazione G-Type v1.5" width="100%">
+  <img src="docs/assets/g-type-v1.5-flow.svg" alt="Flusso di elaborazione G-Type" width="100%">
 </p>
 
 ## Avvio rapido
@@ -75,6 +75,7 @@ g-type version
 ## Funzionalità principali
 
 - **Dettatura push-to-talk globale** con hotkey configurabili.
+- **Dashboard premium locale** con navigazione persistente, Cronologia compatta, drawer dei dettagli, Statistiche rifinite, Impostazioni più chiare, Recovery e onboarding coerenti nello stesso design system.
 - **Context Awareness**: rileva in modo best-effort l'applicazione in primo piano all'avvio della registrazione, usa il contesto per migliorare la comprensione e lo conserva nella cronologia locale.
 - **Modalità**: ogni Modalità può avere hotkey, modello Gemini, timeout e istruzioni dedicate.
 - **Associazioni applicazione → Modalità**: un contesto già osservato può essere collegato a una Modalità. Una hotkey esplicita di una Modalità non predefinita prevale sempre sull'associazione automatica.
@@ -153,7 +154,7 @@ Se G-Type è avviato in primo piano, fermalo con `Ctrl+C` e riavvialo con `g-typ
 
 ## Modalità e associazioni applicative
 
-La UI della v1.5 unifica i precedenti Profili/Template nel concetto di **Modalità**. La configurazione resta semplice e retrocompatibile.
+La UI unifica i precedenti Profili/Template nel concetto di **Modalità**. La configurazione resta semplice e retrocompatibile.
 
 Una Modalità può definire:
 
@@ -231,7 +232,7 @@ Il Recovery conserva Modalità, contesto applicativo e tipo di operazione; per V
 
 ## Dashboard
 
-- **Cronologia** — trascrizioni recenti con ricerca, applicazione/contesto, Modalità, operazione, durata, modello e costo.
+- **Cronologia** — trascrizioni recenti in righe compatte con ricerca, applicazione/contesto, Modalità, operazione, durata, modello, costo preciso e drawer laterale con tutti i dettagli.
 - **Statistiche** — utilizzo, parole, tempo audio, tempo risparmiato stimato, modelli, token e costi.
 - **Impostazioni → Generali** — lingua, valuta, microfono, Modalità predefinita, Hands-Free, Voice Edit, suoni e tray.
 - **Impostazioni → Modalità** — creazione e modifica delle Modalità e preset pronti.
@@ -239,6 +240,7 @@ Il Recovery conserva Modalità, contesto applicativo e tipo di operazione; per V
 - **Impostazioni → Snippet** — editor degli snippet vocali.
 - **Impostazioni → API** — gestione della Gemini API key.
 - **Impostazioni → Sistema** — autoavvio, aggiornamenti e informazioni runtime.
+- **Recovery** — registrazioni fallite preservate con scelta modello, nuovo tentativo, apertura WAV ed eliminazione.
 
 ## Aggiornamenti
 

@@ -19,10 +19,10 @@
   <a href="README.hi.md">हिन्दी</a>
 </p>
 
-G-Type runs in the background, records only when you invoke it, sends audio to your own Google Gemini API key and inserts the result into the active application. **v1.5.0** adds application context, Modes, app bindings, voice snippets, Hands-Free and Voice Edit without requiring a G-Type account, hosted backend or cloud database.
+G-Type runs in the background, records only when you invoke it, sends audio to your own Google Gemini API key and inserts the result into the active application. **v1.6.0** introduces a complete premium dashboard redesign for History, Statistics, Settings, Recovery and first-run onboarding while preserving the local-first v1.5 feature set: application context, Modes, app bindings, voice snippets, Hands-Free and Voice Edit.
 
 <p align="center">
-  <img src="docs/assets/g-type-v1.5-flow.svg" alt="G-Type v1.5 processing workflow" width="100%">
+  <img src="docs/assets/g-type-v1.5-flow.svg" alt="G-Type processing workflow" width="100%">
 </p>
 
 ## Quick start
@@ -75,6 +75,7 @@ g-type version
 ## What G-Type does
 
 - **Push-to-talk dictation** with configurable global hotkeys.
+- **Premium local dashboard** with persistent product navigation, compact History rows, transcription detail drawer, polished Statistics, focused Settings, Recovery and browser onboarding.
 - **Context Awareness**: captures the foreground application at recording start when the operating system exposes it, sends that context to Gemini only to improve understanding, and stores it in local history.
 - **Modes**: each Mode has its own hotkey, Gemini model, timeout and optional instructions.
 - **Application bindings**: an application/context already observed in history can be linked to one Mode. Bindings affect the default Mode and Hands-Free; an explicitly pressed non-default Mode hotkey always wins.
@@ -228,7 +229,7 @@ Recovery keeps the original Mode, application context and operation. Voice Edit 
 
 ## Dashboard
 
-- **History** — latest transcriptions with text search, application/context, Mode, operation, duration, model and precise per-item cost.
+- **History** — recent transcriptions presented as compact rows with search, application/context, Mode, operation, duration, model, precise per-item cost and a side drawer for complete details.
 - **Statistics** — usage, words, audio time, estimated typing time saved, models, tokens and costs.
 - **Settings → General** — language, currency, microphone, default Mode, Hands-Free, Voice Edit, sounds and tray.
 - **Settings → Modes** — Mode CRUD and ready-made presets.
@@ -236,6 +237,7 @@ Recovery keeps the original Mode, application context and operation. Voice Edit 
 - **Settings → Snippets** — voice snippet editor.
 - **Settings → API** — Gemini key management.
 - **Settings → System** — startup at login, update status and runtime information.
+- **Recovery** — preserved failed recordings with model-selectable retry, WAV opening and deletion.
 
 ## Updating G-Type
 

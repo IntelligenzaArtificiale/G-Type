@@ -18,12 +18,12 @@
   <a href="README.hi.md">हिन्दी</a>
 </p>
 
-> 🔄 Sincronizado com `README.md` para **G-Type v1.5.0**.
+> 🔄 Sincronizado com `README.md` para **G-Type v1.6.0**.
 
-G-Type roda em segundo plano, grava somente quando você o aciona, usa a sua própria chave da API Google Gemini e insere o resultado no aplicativo ativo. **v1.5.0** adiciona Context Awareness, Modos, associações aplicativo→Modo, snippets de voz, Hands-Free e Voice Edit sem exigir conta G-Type, backend hospedado ou banco de dados cloud próprio.
+G-Type roda em segundo plano, grava somente quando você o aciona, usa a sua própria chave da API Google Gemini e insere o resultado no aplicativo ativo. **v1.6.0** traz um redesign completo e premium do Dashboard, Histórico, Estatísticas, Configurações, Recovery e onboarding, mantendo os recursos v1.5: Context Awareness, Modos, associações aplicativo→Modo, snippets de voz, Hands-Free e Voice Edit.
 
 <p align="center">
-  <img src="docs/assets/g-type-v1.5-flow.svg" alt="Fluxo do G-Type v1.5" width="100%">
+  <img src="docs/assets/g-type-v1.5-flow.svg" alt="Fluxo do G-Type" width="100%">
 </p>
 
 ## Início rápido
@@ -72,6 +72,7 @@ g-type version
 ## Principais recursos
 
 - **Ditado push-to-talk global** com hotkeys configuráveis.
+- **Dashboard local premium** com navegação persistente, Histórico compacto, painel lateral de detalhes, Estatísticas refinadas e seções mais claras para Configurações, Recovery e onboarding.
 - **Context Awareness**: detecta de forma best-effort o aplicativo em primeiro plano no início da gravação e usa esse contexto para melhorar a compreensão.
 - **Modos**: cada Modo pode ter hotkey, modelo Gemini, timeout e instruções próprias.
 - **Associações aplicativo → Modo**: um contexto já observado pode ser ligado a um Modo. Uma hotkey explícita de um Modo não padrão sempre tem prioridade.
@@ -180,7 +181,7 @@ Recovery mantém Modo, contexto do aplicativo e tipo de operação. Em Voice Edi
 
 ## Dashboard
 
-- **History** — transcrições recentes com busca, aplicativo, Modo, operação, duração, modelo e custo.
+- **History** — transcrições recentes em linhas compactas com busca, aplicativo, Modo, operação, duração, modelo, custo e painel lateral de detalhes.
 - **Statistics** — uso, palavras, áudio, tempo estimado economizado, modelos, tokens e custos.
 - **Settings → General** — idioma, moeda, microfone, Modo padrão, Hands-Free, Voice Edit, sons e tray.
 - **Settings → Modes** — gerenciamento de Modos e presets.
@@ -188,6 +189,7 @@ Recovery mantém Modo, contexto do aplicativo e tipo de operação. Em Voice Edi
 - **Settings → Snippets** — editor de snippets.
 - **Settings → API** — Gemini API key.
 - **Settings → System** — auto-start, atualizações e informações de runtime.
+- **Recovery** — gravações preservadas com escolha de modelo, nova tentativa, abertura WAV e exclusão.
 
 ## Atualizações
 

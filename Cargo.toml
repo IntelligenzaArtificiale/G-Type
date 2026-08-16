@@ -1,6 +1,6 @@
 [package]
 name = "g-type"
-version = "1.5.0"
+version = "1.6.0"
 edition = "2021"
 description = "Local-first context-aware voice input powered by Gemini"
 license = "MIT"
