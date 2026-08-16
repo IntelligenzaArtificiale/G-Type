@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.6.0 — 2026-08-16
+
+- Rebuilds the local dashboard around a calmer product shell inspired by modern desktop SaaS patterns: persistent navigation, stronger visual hierarchy, tighter spacing rules and a single coherent dark design system.
+- Redesigns Cronologia as compact row-cards with clearer metadata, precise per-item costs, fast copy and a dedicated side drawer for complete transcription details without expanding the whole page.
+- Keeps Statistics functionally unchanged while refining KPI cards, charts, model usage and technical metrics for better legibility and less visual noise.
+- Reorganizes Settings into a stable vertical section navigator for General, Modes, Applications, Snippets, API and System, reducing the previous dense wall of controls without changing the underlying APIs or configuration model.
+- Redesigns Recovery to match the main dashboard while preserving model-selectable retry, WAV opening, deletion confirmation and the existing local safety guarantees.
+- Redesigns the three-step first-run onboarding as a cleaner split-layout setup flow while preserving API-key verification, model selection and hotkey capture.
+- Adds an explicit transcription-details drawer and a fourth global KPI for transcription count without introducing new backend state or services.
+- Extends CI to syntax-check the embedded JavaScript in Dashboard, Recovery and Setup, and keeps inline click handlers forbidden so UI behavior remains testable through event delegation.
+- Preserves the local-only architecture, all existing endpoints, context awareness, Modes, application bindings, snippets, Hands-Free, Voice Edit, Recovery, cost tracking, update checks and autostart behavior.
+
 ## v1.5.0 — 2026-08-15
 
 - Adds best-effort Context Awareness at recording start on Windows, macOS and Linux X11/XWayland, while keeping dictation functional when native Wayland does not expose foreground-app metadata.
