@@ -1,10 +1,76 @@
 # G-Type
 
-**Local-first, context-aware voice input for your computer.**
+<p align="center">
+  <strong>Local-first, context-aware voice input for your computer.</strong>
+</p>
 
-G-Type runs in the background, records only when you invoke it, sends audio to your own Google Gemini API key and inserts the result into the active application. Version 1.5 adds application context, Modes, app bindings, voice snippets, Hands-Free and Voice Edit without requiring a G-Type account, hosted backend or cloud database.
+<p align="center">
+  <a href="https://github.com/IntelligenzaArtificiale/G-Type/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/IntelligenzaArtificiale/G-Type?display_name=tag&sort=semver"></a>
+  <a href="https://github.com/IntelligenzaArtificiale/G-Type/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/IntelligenzaArtificiale/G-Type/ci.yml?branch=main&label=CI"></a>
+  <a href="LICENSE"><img alt="License MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Local dashboard" src="https://img.shields.io/badge/dashboard-127.0.0.1%3A9741-6f42c1">
+</p>
 
-[Italiano](README.it.md)
+<p align="center">
+  <a href="README.md"><b>English</b></a> •
+  <a href="README.it.md">Italiano</a> •
+  <a href="README.es.md">Español</a> •
+  <a href="README.pt-BR.md">Português (BR)</a> •
+  <a href="README.hi.md">हिन्दी</a>
+</p>
+
+G-Type runs in the background, records only when you invoke it, sends audio to your own Google Gemini API key and inserts the result into the active application. **v1.5.0** adds application context, Modes, app bindings, voice snippets, Hands-Free and Voice Edit without requiring a G-Type account, hosted backend or cloud database.
+
+<p align="center">
+  <img src="docs/assets/g-type-v1.5-flow.svg" alt="G-Type v1.5 processing workflow" width="100%">
+</p>
+
+## Quick start
+
+### 1. Install
+
+Linux and macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.ps1 | iex
+```
+
+### 2. Complete first-run setup
+
+G-Type opens the local setup page:
+
+```text
+http://127.0.0.1:9741/setup
+```
+
+Add your Gemini API key, select a compatible model and choose the initial push-to-talk hotkey.
+
+### 3. Start dictating
+
+```bash
+g-type
+```
+
+Then hold the configured push-to-talk hotkey, speak, and release.
+
+Dashboard:
+
+```text
+http://127.0.0.1:9741/
+```
+
+### 4. Update later
+
+```bash
+g-type upgrade
+g-type version
+```
 
 ## What G-Type does
 
@@ -15,7 +81,7 @@ G-Type runs in the background, records only when you invoke it, sends audio to y
 - **Voice snippets**: map a spoken trigger such as `calendar link` to an exact text, URL, email, number or signature.
 - **Backtrack**: explicit spoken corrections such as “four o'clock — actually five” keep the final corrected version without otherwise rewriting normal dictation.
 - **Hands-Free**: press the Hands-Free hotkey once to start and again to stop. Default: `Ctrl+Shift+H`.
-- **Voice Edit**: select text, hold the Voice Edit hotkey, speak an editing instruction, then release. G-Type uses one multimodal Gemini request and replaces the selection only if the active application is still the same. Default: `Ctrl+Shift+E`.
+- **Voice Edit**: select text, hold the Voice Edit hotkey, speak an editing instruction, then release. G-Type uses one contextual Gemini request and replaces the selection only if the active application is still the same. Default: `Ctrl+Shift+E`.
 - **Local history, statistics and cost tracking** with application, Mode and operation metadata.
 - **Failed-audio Recovery**: stopped recordings are persisted locally before network processing so provider errors do not lose your speech.
 - **Gemini fallback** for transient provider failures.
@@ -24,21 +90,9 @@ G-Type runs in the background, records only when you invoke it, sends audio to y
 
 Context Awareness is deliberately best-effort. If an operating system or Wayland compositor does not expose the foreground application through a safe portable mechanism, G-Type simply continues without context.
 
-## Install
+## Installation details
 
-### Linux and macOS — one command
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.sh | bash
-```
-
-### Windows PowerShell — one command
-
-```powershell
-irm https://raw.githubusercontent.com/IntelligenzaArtificiale/G-Type/main/install.ps1 | iex
-```
-
-The installer downloads the latest compatible GitHub Release, installs G-Type for the current user and launches it. Startup at login is **not** forced during installation; enable it later from **Dashboard → Settings → System** if desired.
+The installers download the latest compatible GitHub Release, install G-Type for the current user and launch it. Startup at login is **not** forced during installation; enable it later from **Dashboard → Settings → System** if desired.
 
 Prebuilt releases currently target:
 
@@ -49,6 +103,8 @@ Prebuilt releases currently target:
 | macOS | Intel x86_64 |
 | macOS | Apple Silicon arm64 |
 
+Official binaries are published in [GitHub Releases](https://github.com/IntelligenzaArtificiale/G-Type/releases).
+
 ## First run
 
 The first launch opens the local onboarding page:
@@ -58,6 +114,12 @@ http://127.0.0.1:9741/setup
 ```
 
 Setup verifies your Gemini API key, lets you choose a compatible transcription model and configures the initial push-to-talk hotkey.
+
+If setup does not open automatically:
+
+```bash
+g-type setup
+```
 
 ## Daily use
 
@@ -82,6 +144,8 @@ Ctrl+Shift+E       Voice Edit (hold while speaking)
 ```
 
 All hotkeys can be changed from the dashboard. G-Type rejects collisions between Mode hotkeys, Hands-Free and Voice Edit.
+
+When running G-Type in the foreground, stop it with `Ctrl+C` and start it again with `g-type`. If startup at login is enabled, manage it from **Dashboard → Settings → System** rather than creating a second manual autostart entry.
 
 ## Modes and application bindings
 
@@ -135,6 +199,10 @@ Value:   Your Name
 
 Enabled snippets are supplied to Gemini as contextual data and G-Type also applies a deterministic post-transcription replacement where safe. Limits are intentionally modest to keep the feature lightweight: up to 100 snippets, 100 characters per trigger and 4,000 characters per value.
 
+## Hands-Free
+
+Press the Hands-Free hotkey once to start recording and a second time to stop. The recording goes through the same Recovery, Gemini fallback, history and cost-tracking pipeline as standard dictation.
+
 ## Voice Edit
 
 1. Select editable text in the current application.
@@ -156,6 +224,8 @@ http://127.0.0.1:9741/recovery
 
 Recovery keeps the original Mode, application context and operation. Voice Edit recovery also keeps the selected source text needed to regenerate the edit. Manual recovery saves the result to History but deliberately does not inject it into whichever application happens to be focused later.
 
+**Do not manually delete the Recovery directory while it contains recordings you still need.** Use the Recovery page to retry failed items first.
+
 ## Dashboard
 
 - **History** — latest transcriptions with text search, application/context, Mode, operation, duration, model and precise per-item cost.
@@ -167,7 +237,7 @@ Recovery keeps the original Mode, application context and operation. Voice Edit 
 - **Settings → API** — Gemini key management.
 - **Settings → System** — startup at login, update status and runtime information.
 
-## Updates
+## Updating G-Type
 
 G-Type checks for releases in the background without blocking dictation.
 
@@ -180,10 +250,12 @@ g-type version
 
 The updater validates the download, replaces the current binary only after a successful download and keeps a rollback path if replacement fails.
 
+If G-Type is currently running in the foreground, it is safest to stop that running instance with `Ctrl+C`, run `g-type upgrade`, verify with `g-type version`, then start `g-type` again.
+
 ## Useful commands
 
 ```text
-g-type                 Start the daemon
+g-type                 Start G-Type
 g-type setup           Open web onboarding
 g-type stats           Show usage and cost statistics
 g-type upgrade         Update to the latest release
@@ -195,13 +267,45 @@ g-type list-devices    List input devices
 g-type help            Show CLI help
 ```
 
+## Common checks
+
+Check the installed version:
+
+```bash
+g-type version
+```
+
+Test the microphone without a normal dictation:
+
+```bash
+g-type test-audio
+```
+
+List available input devices:
+
+```bash
+g-type list-devices
+```
+
+Find the active configuration path:
+
+```bash
+g-type config
+```
+
+If a completed recording fails during Gemini/network processing, open Recovery before deleting local files:
+
+```text
+http://127.0.0.1:9741/recovery
+```
+
 ## Data and privacy
 
 - The dashboard binds to `127.0.0.1` only.
 - Configuration, history and Recovery files remain in the current user's local directories.
 - The Gemini API key is not returned in clear text by the dashboard API.
 - Audio is sent to the configured Gemini API for transcription/editing.
-- For new context-aware operations, foreground application metadata such as application name and, when safely available, a short window title/context may be included in the Gemini prompt and saved in local History.
+- For context-aware operations, foreground application metadata such as application name and, when safely available, a short window title/context may be included in the Gemini prompt and saved in local History.
 - G-Type has no hosted account system or G-Type cloud database.
 
 ## Build from source
@@ -217,10 +321,21 @@ Before contributing:
 ```bash
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo test --all-features
 ```
 
 Official releases are built by GitHub Actions for all supported targets.
+
+## Changelog and release notes
+
+- Full project changelog: [CHANGELOG.md](CHANGELOG.md)
+- Latest binaries and generated release notes: [GitHub Releases](https://github.com/IntelligenzaArtificiale/G-Type/releases/latest)
+
+## Screenshots
+
+The README currently uses a repository-native workflow visual rather than simulated product screenshots. Real dashboard screenshots should be captured from an actual running build so the documentation cannot drift into showing mock UI that does not match the application.
+
+If you contribute screenshots, place them under `docs/assets/` and keep sensitive history, API keys, email addresses, window titles and personal snippets out of the capture.
 
 ## License
 
