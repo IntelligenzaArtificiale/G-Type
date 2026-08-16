@@ -48,22 +48,26 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Dashboard JavaScript syntax
+      - name: UI JavaScript syntax
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          html = Path('src/settings_ui.html').read_text(encoding='utf-8')
-          scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', html, re.S | re.I)
-          if not scripts:
-              raise SystemExit('settings_ui.html contains no script block')
-          Path('/tmp/g-type-dashboard.js').write_text('\n'.join(scripts), encoding='utf-8')
-          if re.search(r'\bonclick\s*=', html, re.I):
-              raise SystemExit('inline onclick handlers are forbidden in settings_ui.html')
+          for source in ('src/settings_ui.html', 'src/recovery_ui.html', 'src/setup_ui.html'):
+              html = Path(source).read_text(encoding='utf-8')
+              scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', html, re.S | re.I)
+              if not scripts:
+                  raise SystemExit(f'{source} contains no script block')
+              target = Path('/tmp') / (Path(source).stem + '.js')
+              target.write_text('\n'.join(scripts), encoding='utf-8')
+              if re.search(r'\bonclick\s*=', html, re.I):
+                  raise SystemExit(f'inline onclick handlers are forbidden in {source}')
           PY
-          node --check /tmp/g-type-dashboard.js
+          node --check /tmp/settings_ui.js
+          node --check /tmp/recovery_ui.js
+          node --check /tmp/setup_ui.js
 
       - name: Check formatting
         run: cargo fmt --check
