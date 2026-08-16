@@ -46,7 +46,6 @@
 
     <rect x="335" y="350" width="520" height="95" rx="18" fill="#111820" stroke="#1f6feb" stroke-width="2"/>
     <text x="595" y="388" text-anchor="middle" fill="#58a6ff" font-size="21" font-weight="700">Recovery is written before the network request</text>
-    <text x="595" y="418" text-anchor="middle" fill="#c9d1d9" font-size="16">If Gemini/network processing fails, the completed WAV stays recoverable locally.</text>
 
     <path d="M737 295 V350" stroke="#1f6feb" stroke-width="3" fill="none"/>
     <path d="M730 344 L737 354 L744 344 Z" fill="#1f6feb"/>
