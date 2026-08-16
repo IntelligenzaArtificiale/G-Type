@@ -1,19 +1,25 @@
-# Build artifacts
+# Rust build artifacts
 /target/
 debug/
 release/
 
-# IDE
+# Local release binaries
+/g-type
+/g-type-linux-*
+/g-type-windows-*.exe
+/g-type-macos-*
+
+# IDE and editor files
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# OS
+# Operating system files
 .DS_Store
 Thumbs.db
 
-# Env
+# Local environment files
 .env
-16000
+.env.*
