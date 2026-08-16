@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="520" viewBox="0 0 1400 520" role="img" aria-labelledby="title desc">
+  <title id="title">G-Type v1.5 workflow</title>
+  <desc id="desc">How G-Type turns voice into context-aware text, including Modes, Hands-Free, Voice Edit, History and Recovery.</desc>
+  <rect width="1400" height="520" rx="28" fill="#0d1117"/>
+  <text x="70" y="78" fill="#f0f6fc" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700">G-Type v1.5 — local-first voice workflow</text>
+  <text x="70" y="112" fill="#8b949e" font-family="Arial, Helvetica, sans-serif" font-size="18">Push-to-talk, Hands-Free and Voice Edit share the same safe processing pipeline.</text>
+
+  <g font-family="Arial, Helvetica, sans-serif">
+    <rect x="70" y="175" width="210" height="120" rx="18" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+    <text x="175" y="220" text-anchor="middle" fill="#58a6ff" font-size="24" font-weight="700">1. Speak</text>
+    <text x="175" y="252" text-anchor="middle" fill="#c9d1d9" font-size="16">Push-to-talk</text>
+    <text x="175" y="276" text-anchor="middle" fill="#c9d1d9" font-size="16">Hands-Free · Voice Edit</text>
+
+    <rect x="335" y="175" width="230" height="120" rx="18" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+    <text x="450" y="220" text-anchor="middle" fill="#a371f7" font-size="24" font-weight="700">2. Context</text>
+    <text x="450" y="252" text-anchor="middle" fill="#c9d1d9" font-size="16">Active app + Mode</text>
+    <text x="450" y="276" text-anchor="middle" fill="#c9d1d9" font-size="16">Bindings · Snippets</text>
+
+    <rect x="620" y="175" width="235" height="120" rx="18" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+    <text x="737" y="220" text-anchor="middle" fill="#3fb950" font-size="24" font-weight="700">3. Gemini</text>
+    <text x="737" y="252" text-anchor="middle" fill="#c9d1d9" font-size="16">Transcribe or edit</text>
+    <text x="737" y="276" text-anchor="middle" fill="#c9d1d9" font-size="16">Adaptive timeout + fallback</text>
+
+    <rect x="910" y="175" width="210" height="120" rx="18" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+    <text x="1015" y="220" text-anchor="middle" fill="#f2cc60" font-size="24" font-weight="700">4. Insert</text>
+    <text x="1015" y="252" text-anchor="middle" fill="#c9d1d9" font-size="16">Into the active app</text>
+    <text x="1015" y="276" text-anchor="middle" fill="#c9d1d9" font-size="16">Focus-safe Voice Edit</text>
+
+    <rect x="1175" y="175" width="155" height="120" rx="18" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+    <text x="1252" y="220" text-anchor="middle" fill="#ff7b72" font-size="22" font-weight="700">5. Keep</text>
+    <text x="1252" y="252" text-anchor="middle" fill="#c9d1d9" font-size="16">History</text>
+    <text x="1252" y="276" text-anchor="middle" fill="#c9d1d9" font-size="16">Stats · Costs</text>
+
+    <g stroke="#8b949e" stroke-width="3" fill="none">
+      <path d="M280 235 H335"/>
+      <path d="M565 235 H620"/>
+      <path d="M855 235 H910"/>
+      <path d="M1120 235 H1175"/>
+    </g>
+    <g fill="#8b949e">
+      <path d="M329 228 L339 235 L329 242 Z"/>
+      <path d="M614 228 L624 235 L614 242 Z"/>
+      <path d="M904 228 L914 235 L904 242 Z"/>
+      <path d="M1169 228 L1179 235 L1169 242 Z"/>
+    </g>
+
+    <rect x="335" y="350" width="520" height="95" rx="18" fill="#111820" stroke="#1f6feb" stroke-width="2"/>
+    <text x="595" y="388" text-anchor="middle" fill="#58a6ff" font-size="21" font-weight="700">Recovery is written before the network request</text>
+    <text x="595" y="418" text-anchor="middle" fill="#c9d1d9" font-size="16">If Gemini/network processing fails, the completed WAV stays recoverable locally.</text>
+
+    <path d="M737 295 V350" stroke="#1f6feb" stroke-width="3" fill="none"/>
+    <path d="M730 344 L737 354 L744 344 Z" fill="#1f6feb"/>
+
+    <text x="1010" y="384" fill="#8b949e" font-size="17">Local dashboard</text>
+    <text x="1010" y="414" fill="#f0f6fc" font-size="20" font-weight="700">127.0.0.1:9741</text>
+  </g>
+</svg>
