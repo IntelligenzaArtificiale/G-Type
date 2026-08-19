@@ -18,16 +18,20 @@ fail(){ echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 http_get(){
     local url="$1" out="${2:-}"
     if command -v curl >/dev/null 2>&1; then
+        local curl_args=(-fL --retry 5 --retry-delay 2 --connect-timeout 10 --max-time 180 -A "g-type-installer")
+        if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+            curl_args+=(--retry-all-errors)
+        fi
         if [[ -n "$out" ]]; then
-            curl -fsSL --retry 2 --connect-timeout 10 "$url" -o "$out"
+            curl "${curl_args[@]}" "$url" -o "$out"
         else
-            curl -fsSL --retry 2 --connect-timeout 10 "$url"
+            curl "${curl_args[@]}" "$url"
         fi
     elif command -v wget >/dev/null 2>&1; then
         if [[ -n "$out" ]]; then
-            wget -q --timeout=20 --tries=3 "$url" -O "$out"
+            wget -q --timeout=30 --tries=5 --waitretry=2 --user-agent="g-type-installer" "$url" -O "$out"
         else
-            wget -qO- --timeout=20 --tries=3 "$url"
+            wget -qO- --timeout=30 --tries=5 --waitretry=2 --user-agent="g-type-installer" "$url"
         fi
     else
         fail "Serve curl oppure wget. Installane uno e riprova."
@@ -50,13 +54,6 @@ detect_platform(){
         fail "La release Linux precompilata è disponibile al momento solo per x86_64."
     fi
     echo "${os}-${arch}"
-}
-
-latest_version(){
-    local tag
-    tag="$(http_get "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-    [[ -n "$tag" ]] || fail "Impossibile determinare l'ultima release di G-Type."
-    echo "$tag"
 }
 
 install_linux_deps(){
@@ -82,16 +79,18 @@ install_linux_deps(){
 }
 
 install_binary(){
-    local version="$1" platform="$2" asset="${BIN_NAME}-${platform}"
-    local url="https://github.com/${REPO}/releases/download/${version}/${asset}"
+    local platform="$1" asset="${BIN_NAME}-${platform}"
+    local url="https://github.com/${REPO}/releases/latest/download/${asset}"
     local tmp size
 
     mkdir -p "$INSTALL_DIR"
     tmp="$(mktemp "${INSTALL_DIR}/.g-type-install.XXXXXX")"
     trap 'rm -f "${tmp:-}"' EXIT
 
-    info "Download G-Type ${version} per ${platform}..."
-    http_get "$url" "$tmp"
+    info "Download dell'ultima release di G-Type per ${platform}..."
+    if ! http_get "$url" "$tmp"; then
+        fail "Download non riuscito. Controlla la connessione e riprova tra qualche minuto."
+    fi
     size="$(wc -c < "$tmp" | tr -d ' ')"
     [[ "$size" -ge "$MIN_BINARY_BYTES" ]] || fail "Download incompleto (${size} byte). Il binario esistente non è stato toccato."
 
@@ -139,14 +138,12 @@ main(){
     echo
     echo -e "${GREEN}G-Type · installer${NC}"
 
-    local platform version
+    local platform
     platform="$(detect_platform)"
     info "Piattaforma: ${platform}"
     install_linux_deps
 
-    version="$(latest_version)"
-    info "Release: ${version}"
-    install_binary "$version" "$platform"
+    install_binary "$platform"
     persist_path
     start_gtype
 
