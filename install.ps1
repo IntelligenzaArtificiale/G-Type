@@ -33,46 +33,45 @@ function Get-Platform {
     return "windows-x86_64"
 }
 
-function Get-LatestVersion {
-    $url = "https://api.github.com/repos/$Repo/releases/latest"
-    $headers = @{ "User-Agent" = $UserAgent; "Accept" = "application/vnd.github+json" }
-    try {
-        $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get -TimeoutSec 20
-        if ([string]::IsNullOrWhiteSpace($response.tag_name)) { throw "tag_name mancante" }
-        return $response.tag_name
-    } catch {
-        Write-Fail "Impossibile recuperare l'ultima release di G-Type." $_
-    }
-}
-
 function Invoke-Download($url, $outPath) {
-    try {
-        if ($PSVersionTable.PSVersion.Major -lt 6) {
-            Invoke-WebRequest -Uri $url -OutFile $outPath -UseBasicParsing -TimeoutSec 120 | Out-Null
-        } else {
-            Invoke-WebRequest -Uri $url -OutFile $outPath -TimeoutSec 120 | Out-Null
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            $params = @{
+                Uri = $url
+                OutFile = $outPath
+                TimeoutSec = 120
+                UserAgent = $UserAgent
+            }
+            if ($PSVersionTable.PSVersion.Major -lt 6) { $params.UseBasicParsing = $true }
+            Invoke-WebRequest @params | Out-Null
+            return
+        } catch {
+            $lastError = $_
+            Remove-Item $outPath -Force -ErrorAction SilentlyContinue
+            if ($attempt -lt 5) {
+                Write-Warn "Download non riuscito (tentativo $attempt/5). Nuovo tentativo tra pochi secondi..."
+                Start-Sleep -Seconds ([Math]::Min(2 * $attempt, 8))
+            }
         }
-    } catch {
-        Write-Fail "Download fallito: $url" $_
     }
+    Write-Fail "Download fallito dopo 5 tentativi: $url" $lastError
 }
 
-function Install-Binary($version, $platform) {
+function Install-Binary($platform) {
     $assetName = "g-type-${platform}.exe"
-    $url = "https://github.com/$Repo/releases/download/$version/$assetName"
+    $url = "https://github.com/$Repo/releases/latest/download/$assetName"
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     $tmpPath = Join-Path $InstallDir (".g-type-install-" + [Guid]::NewGuid().ToString("N") + ".tmp")
     $backupPath = "$BinPath.bak"
 
     try {
-        Write-Info "Download G-Type $version per $platform..."
+        Write-Info "Download dell'ultima release di G-Type per $platform..."
         Invoke-Download $url $tmpPath
 
         $size = (Get-Item $tmpPath).Length
-        if ($size -lt $MinBinaryBytes) {
-            throw "Download incompleto: $size byte"
-        }
+        if ($size -lt $MinBinaryBytes) { throw "Download incompleto: $size byte" }
 
         Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
         if (Test-Path $BinPath) { Move-Item $BinPath $backupPath -Force }
@@ -80,9 +79,7 @@ function Install-Binary($version, $platform) {
         try {
             Move-Item $tmpPath $BinPath -Force
         } catch {
-            if ((Test-Path $backupPath) -and -not (Test-Path $BinPath)) {
-                Move-Item $backupPath $BinPath -Force
-            }
+            if ((Test-Path $backupPath) -and -not (Test-Path $BinPath)) { Move-Item $backupPath $BinPath -Force }
             throw
         }
 
@@ -136,10 +133,7 @@ function Main {
     $platform = Get-Platform
     Write-Info "Piattaforma: $platform"
 
-    $version = Get-LatestVersion
-    Write-Info "Release: $version"
-
-    Install-Binary $version $platform
+    Install-Binary $platform
     Add-ToPath
     Start-GType
 
